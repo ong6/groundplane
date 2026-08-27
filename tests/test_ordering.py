@@ -141,3 +141,38 @@ def test_missing_declared_field_raises(registry):
 
 def test_happy_path_open_length(registry):
     _run(registry, {"top": ["harbour", "north"]})
+
+
+@pytest.fixture
+def int_key_registry() -> FactRegistry:
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign_rows",
+        [{"id": 101, "ctr": 0.0455}, {"id": 102, "ctr": 0.0412}, {"id": 103, "ctr": 0.0301}],
+        key="id",
+        tool="warehouse.query",
+        args={"table": "campaign_daily", "window": "7d"},
+    )
+    return reg
+
+
+# 10. Integer row keys stay integers through to the comparison: the model returning 101
+# must match, and the stringified "101" must not quietly pass as the same entity.
+def test_int_row_keys_are_not_stringified(int_key_registry):
+    _run(int_key_registry, {"top": [101, 102]}, fact="campaign_rows", k=2, column="ctr")
+    with pytest.raises(UnsupportedClaim, match="never ranked"):
+        _run(int_key_registry, {"top": ["101", "102"]}, fact="campaign_rows", k=2, column="ctr")
+
+
+# 11. Same gap at k=1: the superlative guard compares winners by value, not by str().
+def test_superlative_on_int_keys():
+    reg = FactRegistry()
+    reg.record_ranking(
+        "campaign_ctr",
+        {101: 0.0455, 102: 0.0412, 103: 0.0301},
+        key="ctr",
+        tool="warehouse.query",
+    )
+    superlative(fact="campaign_ctr")(reg, {"winner": 101})
+    with pytest.raises(UnsupportedClaim, match="never ranked"):
+        superlative(fact="campaign_ctr")(reg, {"winner": "101"})
