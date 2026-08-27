@@ -86,7 +86,9 @@ pip install -e ".[dev]"   # not yet published to PyPI
 pytest
 ```
 
-Requires Python >= 3.10. The core has no runtime dependencies.
+Requires Python >= 3.10. The core has no runtime dependencies. `groundplane[langgraph]` and
+`groundplane[mcp]` pull in those frameworks; the adapters themselves import neither, so they are
+readable and testable without either installed.
 
 ## API
 
@@ -118,6 +120,19 @@ stdlib behaviour.
 Row keys keep their own type. An `int` id recorded by `record_table` stays an `int` all the way
 through `to_ranking`, so a model answering `101` is compared against `101` and never `"101"`.
 
+## Adapters
+
+| Symbol | Purpose |
+|---|---|
+| `adapters.langgraph.guarded_node(fn, registry=, facts=, checks=, output_key=, on_violation=)` | Wrap a LangGraph node so its state update crosses a boundary. Without `on_violation` an unsupported claim fails the run; with it, the claim becomes a state update the graph can route to a reask node. A misconfigured check still propagates — a developer bug is not something to reask the model about. |
+| `adapters.langgraph.record_state(registry, state, keys=, tool=)` | Adopt values an upstream node already put in the state as facts. |
+| `adapters.mcp.payload_of(result)` | The value an MCP tool result carries. Structured content wins over the text blocks, which are a rendering of it. An `isError` result raises rather than becoming a fact. |
+| `adapters.mcp.record_result(registry, name, result, tool=, args=)` | Register an MCP result as a fact with the call as provenance. |
+| `adapters.mcp.call_and_record(session, registry, fact=, tool=, arguments=)` | Await an MCP tool call and record what came back. |
+
+Verified against langgraph 1.2.11 and mcp 2.1.1 on 2026-08-27, including a compiled `StateGraph`
+taking the reask edge on a wrong argmax.
+
 ## Claim extraction: structured-output-first
 
 v0 validates **declared fields**, not English. The model emits `{"winner": ..., "ctr": ...}` and the
@@ -132,7 +147,7 @@ a plain string for that reason.
 wrong: wrong winner, right winner with an invented score, unranked entity, a genuine tie flattened
 into one winner, a min/max direction flip, a missing field, a numeric-looking string, and an
 inconsistent rank. `test_ordering.py`, `test_aggregates.py`, `test_entities.py`, and `test_rows.py`
-do the same for the checks above.
+do the same for the checks above, and `test_adapters.py` for the two adapters.
 
 ## Prior art
 
