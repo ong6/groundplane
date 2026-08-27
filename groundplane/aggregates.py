@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import math
 import statistics
-from typing import Any, Literal, Mapping
+from collections.abc import Mapping
+from typing import Any, Literal
 
+from ._internal import is_number, require_field, values_close
 from .boundary import Check
-from .checks import _require_field
 from .errors import UnsupportedClaim
 from .registry import FactRegistry
 
@@ -26,10 +27,6 @@ __all__ = ["aggregate_reconciles", "check_aggregate_reconciles"]
 Op = Literal["sum", "count", "mean", "min", "max", "median"]
 
 _OPS: tuple[str, ...] = ("sum", "count", "mean", "min", "max", "median")
-
-
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _validate_config(op: Op, column: str | None, weight_column: str | None) -> None:
@@ -73,12 +70,21 @@ def check_aggregate_reconciles(
     Raises :class:`UnsupportedClaim` when the arithmetic does not reconcile, when
     the filter selects no rows, when the aggregated column is incomplete, or when
     the recorded table was not exhaustive.
+
+    ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
+    straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
+
+    **Footgun, and deliberate:** ``rel_tolerance=None`` (the default) means ``rel_tol=0.0``,
+    *not* :func:`math.isclose`'s usual ``1e-9``. A checker whose job is to catch a wrong
+    number must default to exact comparison; silently forgiving the last nine digits is a
+    policy, and a policy belongs in the caller's hands. Pass ``rel_tolerance=1e-9``
+    explicitly to get the stdlib behaviour.
     """
     _validate_config(op, column, weight_column)
     table = registry.table(fact)
     provenance = str(registry.get(fact).provenance)
     tool = registry.get(fact).provenance.tool
-    claimed = _require_field(output, field)
+    claimed = require_field(output, field)
 
     if not table.exhaustive:
         raise UnsupportedClaim(
@@ -203,9 +209,11 @@ def check_aggregate_reconciles(
                         "a weighted mean is undefined"
                     ),
                 )
-            computed = math.fsum(v * w for v, w in zip(values, weights)) / total_weight
+            computed = (
+                math.fsum(v * w for v, w in zip(values, weights, strict=True)) / total_weight
+            )
 
-    if not _is_number(claimed):
+    if not is_number(claimed):
         raise UnsupportedClaim(
             field,
             claimed,
@@ -215,7 +223,7 @@ def check_aggregate_reconciles(
             reason=f"claimed {op} is not a number",
         )
 
-    if math.isclose(float(claimed), computed, abs_tol=tolerance, rel_tol=rel_tolerance or 0.0):
+    if values_close(claimed, computed, tolerance=tolerance, rel_tolerance=rel_tolerance):
         return
 
     delta = float(claimed) - computed
@@ -225,8 +233,7 @@ def check_aggregate_reconciles(
     )
     if weight_column is not None and naive_mean is not None:
         weighted_note = f" weighted by {weight_column!r} = {computed:g}"
-        rel = rel_tolerance or 0.0
-        if math.isclose(float(claimed), naive_mean, abs_tol=tolerance, rel_tol=rel):
+        if values_close(claimed, naive_mean, tolerance=tolerance, rel_tolerance=rel_tolerance):
             reason += (
                 f"; the claim matches the unweighted mean {naive_mean:g}, so the model averaged "
                 f"the per-row figures instead of{weighted_note}"

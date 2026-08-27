@@ -15,10 +15,11 @@ and the ranking or row checks at the same time.
 from __future__ import annotations
 
 import difflib
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
+from ._internal import require_field
 from .boundary import Check
-from .checks import _require_field
 from .errors import UnsupportedClaim
 from .registry import Domain, FactRegistry, Ranking, Table
 
@@ -29,18 +30,11 @@ _MAX_RENDERED = 20
 
 def _resolve_domain(registry: FactRegistry, fact: str) -> tuple[frozenset[str], str]:
     """Return the closed name set a fact defines, plus a label for the error text."""
-    value: Any = registry.get(fact).value
+    value: Any = registry.as_type(fact, Domain, Ranking, Table)
     if isinstance(value, Domain):
         return value.members, value.label
-    if isinstance(value, Ranking):
-        return frozenset(value.names), "entity"
-    if isinstance(value, Table):
-        return frozenset(str(key) for key in value.keys), "entity"
-    raise TypeError(
-        f"fact {fact!r} is a {type(value).__name__}, not a Domain, Ranking or Table; "
-        "record it with record_domain(), record_ranking() or record_table() so the "
-        "permitted names are computed in code"
-    )
+    names = value.names if isinstance(value, Ranking) else value.keys
+    return frozenset(str(name) for name in names), "entity"
 
 
 def _render(members: Sequence[str]) -> list[str]:
@@ -164,7 +158,7 @@ def check_entities_recorded(
     scope = _traverse(output, path, fact) if path else output
 
     for name_field in fields:
-        claimed = _require_field(scope, name_field)
+        claimed = require_field(scope, name_field)
         if isinstance(claimed, (list, tuple)):
             if not claimed and not allow_empty:
                 _reject(

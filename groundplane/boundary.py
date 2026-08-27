@@ -8,9 +8,10 @@ failure, because an unchecked block is an unguarded one.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any
 
 from .errors import FactBoundaryError, UnregisteredFact
 from .registry import FactRegistry
@@ -111,7 +112,9 @@ def boundary(
         def __exit__(self, *exc: Any) -> bool | None:
             return cm.__exit__(*exc)
 
-        def __call__(self, fn: Callable[..., Mapping[str, Any]]) -> Callable[..., Mapping[str, Any]]:
+        def __call__(
+            self, fn: Callable[..., Mapping[str, Any]]
+        ) -> Callable[..., Mapping[str, Any]]:
             @wraps(fn)
             def wrapper(*args: Any, **kwargs: Any) -> Mapping[str, Any]:
                 with _boundary_cm(registry, facts, checks, require_output) as b:

@@ -9,20 +9,15 @@ one row, can see it.
 
 from __future__ import annotations
 
-import math
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
+from ._internal import is_number, require_field, values_close
 from .boundary import Check
-from .checks import _require_field
 from .errors import UnsupportedClaim
 from .registry import FactRegistry, Table
 
 __all__ = ["row_integrity", "check_row_integrity"]
-
-
-def _is_number(value: Any) -> bool:
-    """True for real numbers only; ``bool`` is a type-confusion vector, not a number."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _values_match(
@@ -32,11 +27,9 @@ def _values_match(
     tolerance: float,
     rel_tolerance: float | None,
 ) -> bool:
-    if _is_number(claimed) and _is_number(recorded):
-        return math.isclose(
-            float(claimed), float(recorded), abs_tol=tolerance, rel_tol=rel_tolerance or 0.0
-        )
-    if _is_number(claimed) != _is_number(recorded):
+    if is_number(claimed) and is_number(recorded):
+        return values_close(claimed, recorded, tolerance=tolerance, rel_tolerance=rel_tolerance)
+    if is_number(claimed) != is_number(recorded):
         return False
     return bool(claimed == recorded)
 
@@ -47,7 +40,7 @@ def _other_row_with(table: Table, column: str, value: Any, *, exclude: Any) -> A
         if row[table.key] == exclude or column not in row:
             continue
         recorded = row[column]
-        if _is_number(value) != _is_number(recorded):
+        if is_number(value) != is_number(recorded):
             continue
         if recorded == value:
             return row[table.key]
@@ -71,10 +64,19 @@ def check_row_integrity(
     recorded table, when a declared field is absent from the output, or when any value
     disagrees with the resolved row — naming the row the value actually came from when
     it belongs to a different one.
+
+    ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
+    straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
+
+    **Footgun, and deliberate:** ``rel_tolerance=None`` (the default) means ``rel_tol=0.0``,
+    *not* :func:`math.isclose`'s usual ``1e-9``. A checker whose job is to catch a wrong
+    number must default to exact comparison; silently forgiving the last nine digits is a
+    policy, and a policy belongs in the caller's hands. Pass ``rel_tolerance=1e-9``
+    explicitly to get the stdlib behaviour.
     """
     table = registry.table(fact)
     provenance = str(registry.get(fact).provenance)
-    claimed_key = _require_field(output, key_field)
+    claimed_key = require_field(output, key_field)
 
     row = table.row(claimed_key)
     if row is None:
@@ -93,7 +95,7 @@ def check_row_integrity(
     for out_field, column in fields.items():
         if column not in table.columns:
             raise KeyError(f"column {column!r} not in table; columns: {list(table.columns)}")
-        claimed = _require_field(output, out_field)
+        claimed = require_field(output, out_field)
         recorded = row[column]
         if _values_match(claimed, recorded, tolerance=tolerance, rel_tolerance=rel_tolerance):
             continue

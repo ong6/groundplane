@@ -6,12 +6,21 @@ is (name, value, provenance) where provenance names the tool call that produced 
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
+from typing import Any
 
 from .errors import UnregisteredFact
 
 __all__ = ["Fact", "Provenance", "FactRegistry", "Ranking", "Table", "Domain"]
+
+
+def _join(parts: Iterable[str]) -> str:
+    """``"a, b or c"`` — the way an error message wants a list of alternatives."""
+    items = list(dict.fromkeys(parts))
+    if len(items) == 1:
+        return items[0]
+    return f"{', '.join(items[:-1])} or {items[-1]}"
 
 
 @dataclass(frozen=True)
@@ -30,17 +39,22 @@ class Provenance:
 class Ranking:
     """A deterministic ordering computed in code.
 
-    ``items`` is ordered best-first. ``key`` names the metric it was ordered by.
-    ``ties`` lists every item sharing the winning score, so a checker can tell a
-    genuine tie from a model picking its favourite.
+    ``items`` is ordered best-first as ``(name, score)`` pairs. ``key`` names the
+    metric it was ordered by. ``ties`` lists every item sharing the winning score, so
+    a checker can tell a genuine tie from a model picking its favourite.
+
+    A name is whatever the code used to identify the thing — a string, an integer id,
+    a tuple. It is never coerced: an ``int`` row key stays an ``int``, so a check
+    comparing it against the model's ``101`` is comparing like with like rather than
+    ``"101"`` with ``101``.
     """
 
     key: str
-    items: tuple[tuple[str, float], ...]
+    items: tuple[tuple[Any, float], ...]
     higher_is_better: bool = True
 
     @property
-    def winner(self) -> str:
+    def winner(self) -> Any:
         return self.items[0][0]
 
     @property
@@ -48,24 +62,24 @@ class Ranking:
         return self.items[0][1]
 
     @property
-    def ties(self) -> tuple[str, ...]:
+    def ties(self) -> tuple[Any, ...]:
         best = self.winning_score
         return tuple(name for name, score in self.items if score == best)
 
     @property
-    def names(self) -> tuple[str, ...]:
+    def names(self) -> tuple[Any, ...]:
         return tuple(name for name, _ in self.items)
 
     @property
-    def tie_blocks(self) -> tuple[tuple[str, ...], ...]:
+    def tie_blocks(self) -> tuple[tuple[Any, ...], ...]:
         """The ordering split into blocks of equal score, best block first.
 
         A block of length one is an unambiguous position; a longer block is a set
         of positions the data does not distinguish, so any cut inside it is not a
         fact. Each block is a distinct object, so callers may compare by identity.
         """
-        blocks: list[tuple[str, ...]] = []
-        current: list[str] = []
+        blocks: list[tuple[Any, ...]] = []
+        current: list[Any] = []
         last: float | None = None
         for name, score in self.items:
             if last is not None and score != last:
@@ -77,13 +91,13 @@ class Ranking:
             blocks.append(tuple(current))
         return tuple(blocks)
 
-    def score_of(self, name: str) -> float | None:
+    def score_of(self, name: Any) -> float | None:
         for item, score in self.items:
             if item == name:
                 return score
         return None
 
-    def rank_of(self, name: str) -> int | None:
+    def rank_of(self, name: Any) -> int | None:
         for i, (item, _) in enumerate(self.items):
             if item == name:
                 return i + 1
@@ -127,9 +141,7 @@ class Table:
         """Order the rows by ``column``, in code, as a :class:`Ranking`."""
         if column not in self.columns:
             raise KeyError(f"column {column!r} not in table; columns: {list(self.columns)}")
-        pairs = [
-            (str(row[self.key]), float(row[column])) for row in self.rows if column in row
-        ]
+        pairs = [(row[self.key], float(row[column])) for row in self.rows if column in row]
         if not pairs:
             raise ValueError(f"no row carries column {column!r}; nothing to rank")
         ordered = tuple(sorted(pairs, key=lambda kv: kv[1], reverse=higher_is_better))
@@ -172,6 +184,13 @@ class Fact:
         return type(self.value).__name__
 
 
+_RECORDER: Mapping[type, str] = {
+    Ranking: "record_ranking()",
+    Table: "record_table()",
+    Domain: "record_domain()",
+}
+
+
 class FactRegistry:
     """Holds the facts a block of model output is allowed to lean on.
 
@@ -205,7 +224,7 @@ class FactRegistry:
     def record_ranking(
         self,
         name: str,
-        scores: Mapping[str, float] | Sequence[tuple[str, float]],
+        scores: Mapping[Any, float] | Sequence[tuple[Any, float]],
         *,
         key: str,
         tool: str,
@@ -319,32 +338,30 @@ class FactRegistry:
     def value(self, name: str) -> Any:
         return self.get(name).value
 
-    def ranking(self, name: str) -> Ranking:
+    def as_type(self, name: str, *types: type) -> Any:
+        """The fact's value, required to be one of ``types``.
+
+        Every typed accessor and every check routes its type demand through here, so
+        the same user mistake reads the same way wherever it surfaces.
+        """
         fact = self.get(name)
-        if not isinstance(fact.value, Ranking):
-            raise TypeError(
-                f"fact {name!r} is a {fact.type_name}, not a Ranking; "
-                "use record_ranking() so the ordering is computed in code"
-            )
-        return fact.value
+        if isinstance(fact.value, types):
+            return fact.value
+        wanted = _join(t.__name__ for t in types)
+        recorders = _join(_RECORDER.get(t, "record()") for t in types)
+        raise TypeError(
+            f"fact {name!r} is a {fact.type_name}, not a {wanted}; "
+            f"record it with {recorders} so it is computed in code"
+        )
+
+    def ranking(self, name: str) -> Ranking:
+        return self.as_type(name, Ranking)
 
     def table(self, name: str) -> Table:
-        fact = self.get(name)
-        if not isinstance(fact.value, Table):
-            raise TypeError(
-                f"fact {name!r} is a {fact.type_name}, not a Table; "
-                "use record_table() so the rows are recorded with their key column"
-            )
-        return fact.value
+        return self.as_type(name, Table)
 
     def domain(self, name: str) -> Domain:
-        fact = self.get(name)
-        if not isinstance(fact.value, Domain):
-            raise TypeError(
-                f"fact {name!r} is a {fact.type_name}, not a Domain; "
-                "use record_domain() so the permitted names are computed in code"
-            )
-        return fact.value
+        return self.as_type(name, Domain)
 
     def names(self) -> list[str]:
         return list(self._facts)

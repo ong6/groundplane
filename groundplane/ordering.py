@@ -8,10 +8,11 @@ at k lands inside a block of tied scores, in which case "top 3" is not a fact.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, NoReturn, Sequence
+from collections.abc import Hashable, Mapping, Sequence
+from typing import Any, NoReturn
 
+from ._internal import require_field
 from .boundary import Check
-from .checks import _require_field
 from .errors import UnsupportedClaim
 from .registry import FactRegistry, Ranking, Table
 
@@ -20,28 +21,24 @@ __all__ = ["ranking_prefix", "check_ranking_prefix"]
 
 def _resolve_ranking(registry: FactRegistry, fact: str, column: str | None) -> Ranking:
     """Return the ranking a check should run against, from a Ranking or Table fact."""
-    value = registry.get(fact).value
+    value = registry.as_type(fact, Ranking, Table)
     if isinstance(value, Ranking):
         if column is not None:
             raise ValueError(
-                f"fact {fact!r} is already a Ranking; column={column!r} applies only to a Table fact"
+                f"fact {fact!r} is already a Ranking; column={column!r} applies only "
+                "to a Table fact"
             )
         return value
-    if isinstance(value, Table):
-        if column is None:
-            raise ValueError(
-                f"fact {fact!r} is a Table; pass column= to say which column to rank it by"
-            )
-        return value.to_ranking(column)
-    raise TypeError(
-        f"fact {fact!r} is a {registry.get(fact).type_name}, not a Ranking or Table; "
-        "use record_ranking() or record_table()"
-    )
+    if column is None:
+        raise ValueError(
+            f"fact {fact!r} is a Table; pass column= to say which column to rank it by"
+        )
+    return value.to_ranking(column)
 
 
-def _blocks_for_positions(ranking: Ranking, n: int) -> tuple[tuple[str, ...], ...]:
+def _blocks_for_positions(ranking: Ranking, n: int) -> tuple[tuple[Any, ...], ...]:
     """The tie block covering each of the first ``n`` positions, position-aligned."""
-    covering: list[tuple[str, ...]] = []
+    covering: list[tuple[Any, ...]] = []
     for block in ranking.tie_blocks:
         for _ in block:
             if len(covering) == n:
@@ -69,7 +66,7 @@ def check_ranking_prefix(
     """
     ranking = _resolve_ranking(registry, fact, column)
     provenance = str(registry.get(fact).provenance)
-    claimed = _require_field(output, field)
+    claimed = require_field(output, field)
 
     def fail(reason: str, supported: object) -> NoReturn:
         raise UnsupportedClaim(
@@ -100,9 +97,9 @@ def check_ranking_prefix(
             list(ranking.names),
         )
 
-    seen: set[str] = set()
+    seen: set[Any] = set()
     for name in items:
-        if not isinstance(name, str):
+        if not isinstance(name, Hashable):
             fail(f"{name!r} is not an entity name", expected)
         if name in seen:
             fail(f"{name!r} appears twice; a ranking prefix cannot repeat a name", expected)

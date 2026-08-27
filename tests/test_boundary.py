@@ -21,15 +21,15 @@ def test_happy_path_decorator(registry):
 
 
 def test_boundary_rejects_undeclared_fact(registry):
-    with pytest.raises(UnregisteredFact):
-        with boundary(registry, facts=["nope"]):
-            pass
+    with pytest.raises(UnregisteredFact), boundary(registry, facts=["nope"]):
+        pass
 
 
 def test_exiting_without_submit_raises(registry):
-    with pytest.raises(FactBoundaryError, match="without submit"):
-        with boundary(registry, facts=["campaign_ctr"]):
-            pass
+    with pytest.raises(FactBoundaryError, match="without submit"), boundary(
+        registry, facts=["campaign_ctr"]
+    ):
+        pass
 
 
 def test_no_claim_block_may_opt_out(registry):
@@ -38,6 +38,7 @@ def test_no_claim_block_may_opt_out(registry):
 
 
 def test_prose_output_is_rejected(registry):
-    with boundary(registry, facts=["campaign_ctr"], require_output=False) as b:
-        with pytest.raises(TypeError, match="free prose"):
-            b.submit("Harbour was the best performing campaign.")
+    with boundary(registry, facts=["campaign_ctr"], require_output=False) as b, pytest.raises(
+        TypeError, match="free prose"
+    ):
+        b.submit("Harbour was the best performing campaign.")
