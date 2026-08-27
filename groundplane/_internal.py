@@ -12,8 +12,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from .errors import UnsupportedClaim
+from .registry import FactRegistry, Ranking, Table
 
-__all__ = ["is_number", "require_field", "values_close", "TOLERANCE_NOTE"]
+__all__ = [
+    "TOLERANCE_NOTE",
+    "is_number",
+    "require_field",
+    "resolve_ranking",
+    "values_close",
+]
 
 TOLERANCE_NOTE = """\
 ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
@@ -24,6 +31,30 @@ straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
 number must default to exact comparison; silently forgiving the last nine digits is a
 policy, and a policy belongs in the caller's hands. Pass ``rel_tolerance=1e-9``
 explicitly to get the stdlib behaviour."""
+
+
+def resolve_ranking(registry: FactRegistry, fact: str, column: str | None) -> Ranking:
+    """The ranking a check should run against, from a ``Ranking`` or ``Table`` fact.
+
+    Every ordering check takes the same two shapes, so they resolve them the same
+    way: a ``Ranking`` is already an ordering, and a ``Table`` becomes one by
+    naming the ``column`` to rank it by. Passing ``column`` for a ``Ranking``, or
+    omitting it for a ``Table``, is a wiring mistake and raises ``ValueError`` —
+    never ``UnsupportedClaim``, because the model did nothing wrong.
+    """
+    value = registry.as_type(fact, Ranking, Table)
+    if isinstance(value, Ranking):
+        if column is not None:
+            raise ValueError(
+                f"fact {fact!r} is already a Ranking; column={column!r} applies only "
+                "to a Table fact"
+            )
+        return value
+    if column is None:
+        raise ValueError(
+            f"fact {fact!r} is a Table; pass column= to say which column to rank it by"
+        )
+    return value.to_ranking(column)
 
 
 def is_number(value: Any) -> bool:

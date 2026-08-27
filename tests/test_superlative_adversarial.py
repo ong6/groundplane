@@ -5,7 +5,14 @@ Each case names the real-world failure it stands for.
 
 import pytest
 
-from groundplane import FactRegistry, UnsupportedClaim, boundary, field_matches_fact, superlative
+from groundplane import (
+    FactRegistry,
+    UnsupportedClaim,
+    boundary,
+    check_superlative,
+    field_matches_fact,
+    superlative,
+)
 
 
 def _run(registry, output, **kw):
@@ -99,3 +106,24 @@ def test_field_matches_fact_guards_plain_values():
     with pytest.raises(UnsupportedClaim) as exc:
         check(reg, {"rows": 1000})
     assert exc.value.supported == 1042
+
+
+# 9. The superlative guard reads a recorded Table the same way ranking_prefix does:
+# one recorded fact, both checks, and the wrong winner still raises.
+def test_superlative_over_a_table_fact():
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign_rows",
+        [
+            {"campaign": "north", "ctr": 0.0412},
+            {"campaign": "harbour", "ctr": 0.0455},
+            {"campaign": "delta", "ctr": 0.0301},
+        ],
+        key="campaign",
+        tool="warehouse.query",
+    )
+    check_superlative(reg, {"winner": "harbour"}, fact="campaign_rows", column="ctr")
+    with pytest.raises(UnsupportedClaim, match="computed argmax"):
+        check_superlative(reg, {"winner": "north"}, fact="campaign_rows", column="ctr")
+    with pytest.raises(ValueError, match="pass column="):
+        check_superlative(reg, {"winner": "harbour"}, fact="campaign_rows")

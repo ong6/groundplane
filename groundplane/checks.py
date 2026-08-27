@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ._internal import is_number, require_field, values_close
+from ._internal import is_number, require_field, resolve_ranking, values_close
 from .boundary import Check
 from .errors import UnsupportedClaim
 from .registry import FactRegistry
@@ -35,12 +35,16 @@ def check_superlative(
     tolerance: float = 0.0,
     rel_tolerance: float | None = None,
     allow_tie_pick: bool = False,
+    column: str | None = None,
 ) -> None:
     """Verify a claimed "best X" against the argmax the code computed.
 
     Raises :class:`UnsupportedClaim` when the model names a different winner, an
     entity that was never ranked, a score that does not match the computed score,
     or a sole winner where the data has a tie.
+
+    ``fact`` may be a ``Ranking`` or, with ``column=``, a recorded ``Table`` — the
+    same two shapes :func:`~groundplane.ordering.check_ranking_prefix` accepts.
 
     ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
     straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
@@ -51,7 +55,7 @@ def check_superlative(
     policy, and a policy belongs in the caller's hands. Pass ``rel_tolerance=1e-9``
     explicitly to get the stdlib behaviour.
     """
-    ranking = registry.ranking(fact)
+    ranking = resolve_ranking(registry, fact, column)
     provenance = str(registry.get(fact).provenance)
     claimed = require_field(output, winner_field)
 
@@ -142,6 +146,7 @@ def superlative(
     tolerance: float = 0.0,
     rel_tolerance: float | None = None,
     allow_tie_pick: bool = False,
+    column: str | None = None,
 ) -> Check:
     """Build a boundary check from :func:`check_superlative`."""
 
@@ -156,6 +161,7 @@ def superlative(
             tolerance=tolerance,
             rel_tolerance=rel_tolerance,
             allow_tie_pick=allow_tie_pick,
+            column=column,
         )
 
     return check

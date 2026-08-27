@@ -11,29 +11,12 @@ from __future__ import annotations
 from collections.abc import Hashable, Mapping, Sequence
 from typing import Any, NoReturn
 
-from ._internal import require_field
+from ._internal import require_field, resolve_ranking
 from .boundary import Check
 from .errors import UnsupportedClaim
-from .registry import FactRegistry, Ranking, Table
+from .registry import FactRegistry, Ranking
 
 __all__ = ["ranking_prefix", "check_ranking_prefix"]
-
-
-def _resolve_ranking(registry: FactRegistry, fact: str, column: str | None) -> Ranking:
-    """Return the ranking a check should run against, from a Ranking or Table fact."""
-    value = registry.as_type(fact, Ranking, Table)
-    if isinstance(value, Ranking):
-        if column is not None:
-            raise ValueError(
-                f"fact {fact!r} is already a Ranking; column={column!r} applies only "
-                "to a Table fact"
-            )
-        return value
-    if column is None:
-        raise ValueError(
-            f"fact {fact!r} is a Table; pass column= to say which column to rank it by"
-        )
-    return value.to_ranking(column)
 
 
 def _blocks_for_positions(ranking: Ranking, n: int) -> tuple[tuple[Any, ...], ...]:
@@ -64,7 +47,7 @@ def check_ranking_prefix(
     length for ``k``, repeats a name, names an entity that outranks nothing it was
     placed above, or cuts through a block of tied scores (unless ``allow_tie_pick``).
     """
-    ranking = _resolve_ranking(registry, fact, column)
+    ranking = resolve_ranking(registry, fact, column)
     provenance = str(registry.get(fact).provenance)
     claimed = require_field(output, field)
 
