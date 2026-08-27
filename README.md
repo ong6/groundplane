@@ -78,11 +78,21 @@ Requires Python >= 3.10. The core has no runtime dependencies.
 |---|---|
 | `FactRegistry.record(name, value, tool=, args=)` | Register a typed fact with provenance. Write-once. |
 | `FactRegistry.record_ranking(name, scores, key=, tool=, higher_is_better=)` | Compute an argmax ordering in code and register it. |
+| `FactRegistry.record_table(name, rows, key=, tool=, columns=, exhaustive=)` | Register retrieved rows as a `Table`, keyed by one column. `exhaustive=False` marks a truncated result set. |
+| `FactRegistry.record_domain(name, members, tool=, label=)` | Register a closed set of names as a `Domain`. |
 | `FactRegistry.tool(name, fact=)` | Decorator that registers a tool function's return value. |
 | `boundary(reg, facts=, checks=)` | Context manager **and** decorator. Verifies declared facts exist; runs checks on `submit()`; raises if a block exits unchecked. |
 | `superlative(fact=, winner_field=, score_field=, rank_field=, tolerance=, allow_tie_pick=)` | The superlative guard. |
 | `field_matches_fact(field=, fact=)` | Assert an output field equals a registered value. |
+| `ranking_prefix(fact=, field=, k=, ordered=, allow_tie_pick=, column=)` | Top-k guard: a claimed prefix must match the computed ordering, and the cut at k must not fall inside a tie. Reads a `Ranking` or a `Table` column. |
+| `aggregate_reconciles(fact=, field=, column=, op=, where=, weight_column=, tolerance=, rel_tolerance=)` | Recompute a stated `sum`/`count`/`mean`/`min`/`max`/`median` over a recorded `Table`. Refuses a non-exhaustive table or a partial column. |
+| `entities_recorded(fields=, fact=, path=, allow_empty=, case_sensitive=)` | Every name the model uses must come from a recorded `Domain`, `Ranking`, or `Table` key column. |
+| `row_integrity(fact=, key_field=, fields=, tolerance=, rel_tolerance=)` | Resolve the named row first, then read every other field off that one row — catches attribute swap. |
 | `UnsupportedClaim`, `UnregisteredFact` | Failures, both subclasses of `FactBoundaryError`. |
+
+Each `X(...)` builder has an imperative twin, `check_X(registry, output, ...)`, callable outside a
+boundary. Facts are write-once; one recorded `Table` can back the ranking, aggregate, entity, and
+row checks at the same time.
 
 ## Claim extraction: structured-output-first
 
@@ -92,12 +102,23 @@ an LLM judge; constraining the model to fields makes the check total and determi
 extraction, if it lands, sits on top of this layer — never instead of it. `Boundary.submit()` rejects
 a plain string for that reason.
 
+## Checks
+
+| Check | Failure it catches |
+|---|---|
+| `superlative` | "Best X" names something other than the computed argmax, or quotes a score that is not the computed one. |
+| `ranking_prefix` | A top-k list with the right names in an invented order, an interloper in the last slot, a repeated name, or a cut through a block of tied scores. |
+| `aggregate_reconciles` | A total that does not sum, an unweighted mean presented as a weighted one, a filtered aggregate taken over the wrong subset, and any aggregate over a truncated table. |
+| `entities_recorded` | A name blended out of two real ones, an id leaked from an earlier tool call, case drift, or an empty list smuggling in a "none qualified" claim. |
+| `row_integrity` | Attribute swap: the right row named, with a neighbouring row's value in another field. |
+
 ## Adversarial fixtures
 
 `tests/test_superlative_adversarial.py` holds cases where the plausible model answer is provably
 wrong: wrong winner, right winner with an invented score, unranked entity, a genuine tie flattened
 into one winner, a min/max direction flip, a missing field, a numeric-looking string, and an
-inconsistent rank.
+inconsistent rank. `test_ordering.py`, `test_aggregates.py`, `test_entities.py`, and `test_rows.py`
+do the same for the checks above.
 
 ## Prior art
 

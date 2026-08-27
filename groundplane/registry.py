@@ -7,11 +7,11 @@ is (name, value, provenance) where provenance names the tool call that produced 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .errors import UnregisteredFact
 
-__all__ = ["Fact", "Provenance", "FactRegistry", "Ranking"]
+__all__ = ["Fact", "Provenance", "FactRegistry", "Ranking", "Table", "Domain"]
 
 
 @dataclass(frozen=True)
@@ -56,6 +56,27 @@ class Ranking:
     def names(self) -> tuple[str, ...]:
         return tuple(name for name, _ in self.items)
 
+    @property
+    def tie_blocks(self) -> tuple[tuple[str, ...], ...]:
+        """The ordering split into blocks of equal score, best block first.
+
+        A block of length one is an unambiguous position; a longer block is a set
+        of positions the data does not distinguish, so any cut inside it is not a
+        fact. Each block is a distinct object, so callers may compare by identity.
+        """
+        blocks: list[tuple[str, ...]] = []
+        current: list[str] = []
+        last: float | None = None
+        for name, score in self.items:
+            if last is not None and score != last:
+                blocks.append(tuple(current))
+                current = []
+            current.append(name)
+            last = score
+        if current:
+            blocks.append(tuple(current))
+        return tuple(blocks)
+
     def score_of(self, name: str) -> float | None:
         for item, score in self.items:
             if item == name:
@@ -67,6 +88,75 @@ class Ranking:
             if item == name:
                 return i + 1
         return None
+
+
+@dataclass(frozen=True)
+class Table:
+    """A set of rows the code retrieved, keyed by one column.
+
+    ``rows`` is ordered as the tool returned them and ``key`` names the column that
+    identifies a row. ``exhaustive`` records whether these are *all* the rows the
+    query matched: a paginated or capped result set is not a valid base for an
+    aggregate, and the flag is what lets a checker say so instead of adding up a
+    prefix.
+    """
+
+    key: str
+    rows: tuple[Mapping[str, Any], ...]
+    columns: tuple[str, ...]
+    exhaustive: bool = True
+
+    @property
+    def keys(self) -> tuple[Any, ...]:
+        return tuple(row[self.key] for row in self.rows)
+
+    def row(self, key: Any) -> Mapping[str, Any] | None:
+        """The row identified by ``key``, or ``None`` if the table has no such row."""
+        for row in self.rows:
+            if row[self.key] == key:
+                return row
+        return None
+
+    def column(self, name: str) -> tuple[Any, ...]:
+        """Every value present in ``name``, skipping rows that do not carry it."""
+        if name not in self.columns:
+            raise KeyError(f"column {name!r} not in table; columns: {list(self.columns)}")
+        return tuple(row[name] for row in self.rows if name in row)
+
+    def to_ranking(self, column: str, *, higher_is_better: bool = True) -> Ranking:
+        """Order the rows by ``column``, in code, as a :class:`Ranking`."""
+        if column not in self.columns:
+            raise KeyError(f"column {column!r} not in table; columns: {list(self.columns)}")
+        pairs = [
+            (str(row[self.key]), float(row[column])) for row in self.rows if column in row
+        ]
+        if not pairs:
+            raise ValueError(f"no row carries column {column!r}; nothing to rank")
+        ordered = tuple(sorted(pairs, key=lambda kv: kv[1], reverse=higher_is_better))
+        return Ranking(key=column, items=ordered, higher_is_better=higher_is_better)
+
+
+@dataclass(frozen=True)
+class Domain:
+    """A closed set of names the code produced.
+
+    Everything the model is allowed to name lives in ``members``; ``label`` is the
+    noun the error message should use ("campaign", "region") so a reask prompt reads
+    like the caller's domain rather than the library's.
+    """
+
+    members: frozenset[str]
+    label: str = "entity"
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(sorted(self.members))
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.members
+
+    def __len__(self) -> int:
+        return len(self.members)
 
 
 @dataclass(frozen=True)
@@ -134,6 +224,75 @@ class FactRegistry:
         ranking = Ranking(key=key, items=ordered, higher_is_better=higher_is_better)
         return self.record(name, ranking, tool=tool, args=args)
 
+    def record_table(
+        self,
+        name: str,
+        rows: Iterable[Mapping[str, Any]],
+        *,
+        key: str,
+        tool: str,
+        args: Mapping[str, Any] | None = None,
+        columns: Sequence[str] | None = None,
+        exhaustive: bool = True,
+    ) -> Fact:
+        """Register the rows a tool returned as a :class:`Table` fact.
+
+        ``key`` must identify a row: every row carries it and no two rows share a
+        value. ``columns`` defaults to the union of the row keys, in first-seen
+        order. Pass ``exhaustive=False`` when the result set was paginated, capped,
+        or otherwise truncated, so aggregate checks refuse to total a prefix.
+        """
+        materialised = tuple(dict(row) for row in rows)
+        if not materialised:
+            raise ValueError(f"cannot record an empty table for fact {name!r}")
+
+        seen_columns: list[str] = []
+        for row in materialised:
+            for column in row:
+                if column not in seen_columns:
+                    seen_columns.append(column)
+        resolved = tuple(columns) if columns is not None else tuple(seen_columns)
+        if key not in resolved:
+            raise ValueError(
+                f"key column {key!r} is not among the table columns {list(resolved)}"
+            )
+
+        seen_keys: set[Any] = set()
+        for i, row in enumerate(materialised):
+            if key not in row:
+                raise ValueError(f"row {i} of fact {name!r} has no key column {key!r}")
+            if row[key] in seen_keys:
+                raise ValueError(
+                    f"key {row[key]!r} appears more than once in fact {name!r}; "
+                    f"{key!r} does not identify a row"
+                )
+            seen_keys.add(row[key])
+
+        table = Table(key=key, rows=materialised, columns=resolved, exhaustive=exhaustive)
+        return self.record(name, table, tool=tool, args=args)
+
+    def record_domain(
+        self,
+        name: str,
+        members: Iterable[str],
+        *,
+        tool: str,
+        args: Mapping[str, Any] | None = None,
+        label: str = "entity",
+    ) -> Fact:
+        """Register a closed set of names as a :class:`Domain` fact."""
+        collected = tuple(members)
+        if not collected:
+            raise ValueError(f"cannot record an empty domain for fact {name!r}")
+        for member in collected:
+            if not isinstance(member, str):
+                raise TypeError(
+                    f"domain {name!r} member {member!r} is a {type(member).__name__}, "
+                    "not a name; a domain holds strings"
+                )
+        domain = Domain(members=frozenset(collected), label=label)
+        return self.record(name, domain, tool=tool, args=args)
+
     def tool(self, name: str, *, fact: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Decorate a tool function so its return value is registered on call."""
 
@@ -166,6 +325,24 @@ class FactRegistry:
             raise TypeError(
                 f"fact {name!r} is a {fact.type_name}, not a Ranking; "
                 "use record_ranking() so the ordering is computed in code"
+            )
+        return fact.value
+
+    def table(self, name: str) -> Table:
+        fact = self.get(name)
+        if not isinstance(fact.value, Table):
+            raise TypeError(
+                f"fact {name!r} is a {fact.type_name}, not a Table; "
+                "use record_table() so the rows are recorded with their key column"
+            )
+        return fact.value
+
+    def domain(self, name: str) -> Domain:
+        fact = self.get(name)
+        if not isinstance(fact.value, Domain):
+            raise TypeError(
+                f"fact {name!r} is a {fact.type_name}, not a Domain; "
+                "use record_domain() so the permitted names are computed in code"
             )
         return fact.value
 
