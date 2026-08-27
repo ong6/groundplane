@@ -3,7 +3,7 @@
 A hard line between the parts of an agent's output the model may generate and the parts that must
 come from code — and a loud failure when the model crosses it.
 
-**Status: v0, in development.** API unstable. Name is a working title.
+**Status: v0, in development.** API unstable. Not yet on PyPI.
 
 ## The problem in 60 seconds
 
@@ -19,6 +19,20 @@ checker validates the model's structured output against those facts. An unsuppor
 Scope is deliberately narrow: **bounded, declared facts only**. Not a general hallucination detector,
 and not model-based grading — an LLM judge would reintroduce the failure mode being removed.
 
+## What it checks
+
+Five families. Each one asks how the recorded facts relate to *each other*, which is what a
+per-field validator cannot see. Every value in a swapped row is a real value, and a wrong
+argmax is spelled the same as the right one.
+
+| Check | Failure it catches |
+|---|---|
+| `superlative` | "Best X" names something other than the computed argmax, or quotes a score that is not the computed one. |
+| `ranking_prefix` | A top-k list with the right names in an invented order, an interloper in the last slot, a repeated name, or a cut through a block of tied scores. |
+| `aggregate_reconciles` | A total that does not sum, an unweighted mean presented as a weighted one, a filtered aggregate taken over the wrong subset, and any aggregate over a truncated table. |
+| `entities_recorded` | A name blended out of two real ones, an id leaked from an earlier tool call, case drift, or an empty list smuggling in a "none qualified" claim. |
+| `row_integrity` | Attribute swap: the right row named, with a neighbouring row's value in another field. |
+
 ## Flow
 
 ```mermaid
@@ -26,12 +40,14 @@ flowchart LR
     T["Tools<br/>(SQL, metrics, API)"] --> R["FactRegistry<br/>value + provenance"]
     R --> B["boundary(...)<br/>declares permitted facts"]
     M["Model<br/>structured output"] --> B
-    B --> C{"Checker<br/>superlative guard"}
+    B --> C{"Checker<br/>superlative · ordering<br/>aggregates · entities · rows"}
     C -->|claim resolves| P["pass — output returned"]
     C -->|claim unsupported| X["raise UnsupportedClaim"]
 ```
 
 ## Before / after
+
+`superlative` is the narrowest of the five and the easiest to show.
 
 Before — the winner is whatever the model wrote:
 
@@ -82,7 +98,7 @@ Requires Python >= 3.10. The core has no runtime dependencies.
 | `FactRegistry.record_domain(name, members, tool=, label=)` | Register a closed set of names as a `Domain`. |
 | `FactRegistry.tool(name, fact=)` | Decorator that registers a tool function's return value. |
 | `boundary(reg, facts=, checks=)` | Context manager **and** decorator. Verifies declared facts exist; runs checks on `submit()`; raises if a block exits unchecked. |
-| `superlative(fact=, winner_field=, score_field=, rank_field=, tolerance=, allow_tie_pick=)` | The superlative guard. |
+| `superlative(fact=, winner_field=, score_field=, rank_field=, tolerance=, rel_tolerance=, allow_tie_pick=, column=)` | The argmax guard. Reads a `Ranking`, or a `Table` with `column=`. |
 | `field_matches_fact(field=, fact=)` | Assert an output field equals a registered value. |
 | `ranking_prefix(fact=, field=, k=, ordered=, allow_tie_pick=, column=)` | Top-k guard: a claimed prefix must match the computed ordering, and the cut at k must not fall inside a tie. Reads a `Ranking` or a `Table` column. |
 | `aggregate_reconciles(fact=, field=, column=, op=, where=, weight_column=, tolerance=, rel_tolerance=)` | Recompute a stated `sum`/`count`/`mean`/`min`/`max`/`median` over a recorded `Table`. Refuses a non-exhaustive table or a partial column. |
@@ -91,8 +107,16 @@ Requires Python >= 3.10. The core has no runtime dependencies.
 | `UnsupportedClaim`, `UnregisteredFact` | Failures, both subclasses of `FactBoundaryError`. |
 
 Each `X(...)` builder has an imperative twin, `check_X(registry, output, ...)`, callable outside a
-boundary. Facts are write-once; one recorded `Table` can back the ranking, aggregate, entity, and
-row checks at the same time.
+boundary. Facts are write-once; one recorded `Table` can back the superlative, ranking, aggregate,
+entity, and row checks at the same time.
+
+Every numeric check takes `tolerance` (absolute) and `rel_tolerance` (relative). Both default to
+exact: `rel_tolerance=None` means `rel_tol=0.0`, not `math.isclose`'s usual `1e-9`. A checker built
+to catch a wrong number shouldn't forgive nine digits by default. Pass `rel_tolerance=1e-9` for the
+stdlib behaviour.
+
+Row keys keep their own type. An `int` id recorded by `record_table` stays an `int` all the way
+through `to_ranking`, so a model answering `101` is compared against `101` and never `"101"`.
 
 ## Claim extraction: structured-output-first
 
@@ -101,16 +125,6 @@ checker resolves each field against the registry. Parsing prose would need eithe
 an LLM judge; constraining the model to fields makes the check total and deterministic. Prose
 extraction, if it lands, sits on top of this layer — never instead of it. `Boundary.submit()` rejects
 a plain string for that reason.
-
-## Checks
-
-| Check | Failure it catches |
-|---|---|
-| `superlative` | "Best X" names something other than the computed argmax, or quotes a score that is not the computed one. |
-| `ranking_prefix` | A top-k list with the right names in an invented order, an interloper in the last slot, a repeated name, or a cut through a block of tied scores. |
-| `aggregate_reconciles` | A total that does not sum, an unweighted mean presented as a weighted one, a filtered aggregate taken over the wrong subset, and any aggregate over a truncated table. |
-| `entities_recorded` | A name blended out of two real ones, an id leaked from an earlier tool call, case drift, or an empty list smuggling in a "none qualified" claim. |
-| `row_integrity` | Attribute swap: the right row named, with a neighbouring row's value in another field. |
 
 ## Adversarial fixtures
 
@@ -122,16 +136,20 @@ do the same for the checks above.
 
 ## Prior art
 
-**`TODO: verify` — not yet researched. Each line below is an assumption, not a finding.**
+Checked 2026-08-27. Star counts as of that date.
 
-| Project | Assumed overlap | Assumed difference |
+| Project | What it validates | Where it stops |
 |---|---|---|
-| [Guardrails AI](https://github.com/guardrails-ai/guardrails) | Validators over LLM output, fail/retry on violation | Validates output shape and content rules in isolation; no registry of code-computed facts to check against |
-| [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) | Rails constraining what an LLM may say | Dialogue/topic and safety rails expressed in Colang; not per-claim provenance resolution |
-| [Instructor](https://github.com/567-labs/instructor) | Structured output with Pydantic validation and retries | Validates types and field constraints; does not compare a field to an argmax computed elsewhere |
+| [Guardrails AI](https://github.com/guardrails-ai/guardrails) (7.3k★) | Validators over LLM output, with reask on violation; its provenance validators ask whether generated text is supported by a source document. | Support is decided by embedding similarity or an LLM judge, so the verdict is probabilistic and the input is prose. Nothing is compared against a value computed in code. |
+| [Instructor](https://github.com/567-labs/instructor) (13.8k★) | Structured output with Pydantic validation and reask. | The substrate, not a competitor — `groundplane` checks the object Instructor gets back. A field validator sees one field at a time and cannot see a relation that spans several. |
+| [agent-citation](https://dev.to/mukundakatta/agent-citation-track-where-every-agent-claim-came-from-3hbd) | That every claim requiring a source has one attached, kept in Python objects rather than re-asked of the model. | Presence, not agreement. A citation can sit on a claim the cited fact contradicts. |
+| [GroundProbe](https://github.com/aureliocpr-ctrl/groundprobe) | Tags each claim grounded / inferred / speculative from n-gram, LCS and tf-idf overlap with the source, with an optional LLM tie-break near the thresholds. | Lexical overlap, and it reports a score rather than raising. A wrong argmax is spelled almost exactly like the right one. |
 
-Being second is fine. Being second and unaware is not — this table gets replaced with real findings
-before release.
+All four ask a version of "does this string appear in, or resemble, a source?". None validates a
+**relational** property of the recorded facts — that the named winner is the argmax, that the cut at
+k misses a tie, that a stated total reconciles, that the number printed against a row came off that
+row. The argmax case on its own is about forty lines of Instructor validator. The reason to build a
+library is the other four.
 
 ## License
 
