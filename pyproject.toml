@@ -14,11 +14,23 @@ keywords = ["llm", "agents", "guardrails", "hallucination", "provenance"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
   "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Testing",
   "Typing :: Typed",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/ong6/groundplane"
+Repository = "https://github.com/ong6/groundplane"
+Issues = "https://github.com/ong6/groundplane/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff>=0.5"]
