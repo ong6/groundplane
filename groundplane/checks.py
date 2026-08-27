@@ -100,6 +100,8 @@ def check_superlative(
     if score_field is not None:
         claimed_score = require_field(output, score_field)
         true_score = ranking.score_of(claimed)
+        # claimed was established to be in ranking.names above, so it has a score.
+        assert true_score is not None
         if not is_number(claimed_score):
             raise UnsupportedClaim(
                 score_field,
