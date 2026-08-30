@@ -166,6 +166,53 @@ k misses a tie, that a stated total reconciles, that the number printed against 
 row. The argmax case on its own is about forty lines of Instructor validator. The reason to build a
 library is the other four.
 
+## The longer argument
+
+The failure this library exists for is small and does not look like a failure. An agent queries a
+table of campaign CTRs, gets seven rows back, and writes "north performed best this week." North was
+second. Harbour won. Every word is fluent, the score quoted is a real score from the result set, and
+nothing in the pipeline logs so much as a warning. The customer reads it.
+
+You cannot prompt this away. "Only state what is in the data" is an instruction to the exact
+component that failed. The model already had the data; taking the max of seven numbers is trivial,
+and it still didn't. With sampling in the loop, "usually right" is the ceiling — and in production,
+usually means the wrong winner ships about once a week, silently.
+
+You also cannot grade it with a second model. An LLM judge asked "does this summary match the data?"
+is the same class of component making the same class of mistake, now wearing a rubber stamp. If the
+failure is *the model asserted a relationship between values it did not compute*, the fix cannot be
+another uncomputed assertion.
+
+So the fix is boring, and the boringness is the feature. The argmax is computed in code at the
+moment the ranking is recorded: `record_ranking` stores the ordering, the winning key, and the
+provenance of the tool call that produced it. The model's job shrinks to phrasing: it emits
+`{"winner": ..., "ctr": ...}`, and `superlative` resolves those fields against the computed answer.
+When they disagree, the boundary raises `UnsupportedClaim`, and the message carries the tool call,
+its arguments, the computed winner, and where the model's pick actually ranked — because whoever is
+debugging this at 2am needs to know immediately whether the data or the prose was wrong.
+
+Three choices I would defend in a review:
+
+**Exact comparison by default.** Every numeric check takes tolerances, but they default to zero —
+`rel_tolerance=None` means `rel_tol=0.0`, not `math.isclose`'s usual `1e-9`. A checker built to
+catch a wrong number should not forgive nine digits of drift unless you tell it to.
+
+**Facts are write-once.** A registry a later tool call can overwrite is a registry whose provenance
+lies. If the fact changed, that is a new fact with its own name and its own tool call.
+
+**An unchecked boundary is an error.** Exit a `boundary` block without calling `submit()` and it
+raises. A check that silently never ran is worse than no check, because someone upstream is now
+trusting it.
+
+The honest scope statement: this validates declared, structured fields against declared, recorded
+facts. It is not a hallucination detector. If the model names the right winner and then editorialises
+misleadingly around it, that passes — the checker reads fields, not prose. I kept the scope that
+narrow deliberately, because every system I looked at that tried to verify open prose ended up
+delegating the verdict to embeddings or a judge model, which reintroduces the probabilistic verdict
+this exists to remove. The five check families all validate *relations between recorded values* —
+argmax, ordering, reconciliation, membership, row integrity — which is precisely the ground a
+per-field validator cannot see and a similarity score cannot express.
+
 ## License
 
 MIT © 2026 Ong Jun Xiong
