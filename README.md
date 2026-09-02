@@ -1,5 +1,10 @@
 # groundplane
 
+[![CI](https://github.com/ong6/groundplane/actions/workflows/ci.yml/badge.svg)](https://github.com/ong6/groundplane/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/groundplane)](https://pypi.org/project/groundplane/)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://github.com/ong6/groundplane/blob/main/pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/ong6/groundplane/blob/main/LICENSE)
+
 A hard line between the parts of an agent's output the model may generate and the parts that must
 come from code — and a loud failure when the model crosses it.
 
@@ -21,7 +26,7 @@ and not model-based grading — an LLM judge would reintroduce the failure mode 
 
 ## What it checks
 
-Five families. Each one asks how the recorded facts relate to *each other*, which is what a
+Six families. Each one asks how the recorded facts relate to *each other*, which is what a
 per-field validator cannot see. Every value in a swapped row is a real value, and a wrong
 argmax is spelled the same as the right one.
 
@@ -32,6 +37,7 @@ argmax is spelled the same as the right one.
 | `aggregate_reconciles` | A total that does not sum, an unweighted mean presented as a weighted one, a filtered aggregate taken over the wrong subset, and any aggregate over a truncated table. |
 | `entities_recorded` | A name blended out of two real ones, an id leaked from an earlier tool call, case drift, or an empty list smuggling in a "none qualified" claim. |
 | `row_integrity` | Attribute swap: the right row named, with a neighbouring row's value in another field. |
+| `comparison` | "A beat B by 12%" where the delta was never computed: wrong sign, percent where percentage points were meant, the ratio quoted as a difference, or the two entities swapped. |
 
 ## Flow
 
@@ -40,20 +46,20 @@ flowchart LR
     T["Tools<br/>(SQL, metrics, API)"] --> R["FactRegistry<br/>value + provenance"]
     R --> B["boundary(...)<br/>declares permitted facts"]
     M["Model<br/>structured output"] --> B
-    B --> C{"Checker<br/>superlative · ordering<br/>aggregates · entities · rows"}
+    B --> C{"Checker<br/>superlative · ordering · aggregates<br/>entities · rows · comparison"}
     C -->|claim resolves| P["pass — output returned"]
     C -->|claim unsupported| X["raise UnsupportedClaim"]
 ```
 
 ## Before / after
 
-`superlative` is the narrowest of the five and the easiest to show.
+`superlative` is the narrowest of the six and the easiest to show.
 
 Before — the winner is whatever the model wrote:
 
 ```python
 rows = warehouse.query("select campaign, ctr from campaign_daily")
-summary = llm(f"Which campaign performed best?\n{rows}")   # says "north". It was "harbour".
+summary = llm(f"Which campaign performed best?\n{rows}")  # says "north". It was "harbour".
 ```
 
 After — the argmax is computed in code, and the model can only phrase it:
@@ -65,11 +71,13 @@ reg = FactRegistry()
 reg.record_ranking(
     "campaign_ctr",
     {"north": 0.0412, "harbour": 0.0455, "delta": 0.0301},
-    key="ctr", tool="warehouse.query", args={"table": "campaign_daily", "window": "7d"},
+    key="ctr",
+    tool="warehouse.query",
+    args={"table": "campaign_daily", "window": "7d"},
 )
 
 with boundary(reg, facts=["campaign_ctr"], checks=[superlative(fact="campaign_ctr")]) as b:
-    b.submit(llm_structured(facts=b.facts()))   # {"winner": "north", ...}
+    b.submit(llm_structured(facts=b.facts()))  # {"winner": "north", ...}
 ```
 
 ```
@@ -82,9 +90,10 @@ computed argmax on 'ctr' is 'harbour' (0.0455); 'north' ranked #2 at 0.0412
 ## Install
 
 ```bash
-pip install -e ".[dev]"   # not yet published to PyPI
-pytest
+pip install groundplane
 ```
+
+First PyPI release is pending; until then, `pip install -e ".[dev]"` from a checkout.
 
 Requires Python >= 3.10. The core has no runtime dependencies. `groundplane[langgraph]` and
 `groundplane[mcp]` pull in those frameworks; the adapters themselves import neither, so they are
@@ -100,12 +109,13 @@ readable and testable without either installed.
 | `FactRegistry.record_domain(name, members, tool=, label=)` | Register a closed set of names as a `Domain`. |
 | `FactRegistry.tool(name, fact=)` | Decorator that registers a tool function's return value. |
 | `boundary(reg, facts=, checks=)` | Context manager **and** decorator. Verifies declared facts exist; runs checks on `submit()`; raises if a block exits unchecked. |
-| `superlative(fact=, winner_field=, score_field=, rank_field=, tolerance=, rel_tolerance=, allow_tie_pick=, column=)` | The argmax guard. Reads a `Ranking`, or a `Table` with `column=`. |
+| `superlative(fact=, winner_field=, score_field=, rank_field=, tolerance=, rel_tolerance=, allow_tie_pick=, column=, higher_is_better=, on_missing=)` | The argmax guard. Reads a `Ranking`, or a `Table` with `column=`. A row missing the column raises unless `on_missing="skip"`, which warns. |
 | `field_matches_fact(field=, fact=)` | Assert an output field equals a registered value. |
-| `ranking_prefix(fact=, field=, k=, ordered=, allow_tie_pick=, column=)` | Top-k guard: a claimed prefix must match the computed ordering, and the cut at k must not fall inside a tie. Reads a `Ranking` or a `Table` column. |
+| `ranking_prefix(fact=, field=, k=, ordered=, allow_tie_pick=, column=, higher_is_better=, on_missing=)` | Top-k guard: a claimed prefix must match the computed ordering, and the cut at k must not fall inside a tie. Reads a `Ranking` or a `Table` column. |
 | `aggregate_reconciles(fact=, field=, column=, op=, where=, weight_column=, tolerance=, rel_tolerance=)` | Recompute a stated `sum`/`count`/`mean`/`min`/`max`/`median` over a recorded `Table`. Refuses a non-exhaustive table or a partial column. |
 | `entities_recorded(fields=, fact=, path=, allow_empty=, case_sensitive=)` | Every name the model uses must come from a recorded `Domain`, `Ranking`, or `Table` key column. |
 | `row_integrity(fact=, key_field=, fields=, tolerance=, rel_tolerance=)` | Resolve the named row first, then read every other field off that one row — catches attribute swap. |
+| `comparison(fact=, a_field=, b_field=, delta_field=, column=, kind=, direction=, tolerance=, rel_tolerance=)` | Recompute the delta between two entities in code as `abs`, `pct`, `ratio`, or `pp`; on a mismatch, say which convention the claim actually matches. |
 | `UnsupportedClaim`, `UnregisteredFact` | Failures, both subclasses of `FactBoundaryError`. |
 
 Each `X(...)` builder has an imperative twin, `check_X(registry, output, ...)`, callable outside a
@@ -209,7 +219,7 @@ facts. It is not a hallucination detector. If the model names the right winner a
 misleadingly around it, that passes — the checker reads fields, not prose. I kept the scope that
 narrow deliberately, because every system I looked at that tried to verify open prose ended up
 delegating the verdict to embeddings or a judge model, which reintroduces the probabilistic verdict
-this exists to remove. The five check families all validate *relations between recorded values* —
+this exists to remove. The six check families all validate *relations between recorded values* —
 argmax, ordering, reconciliation, membership, row integrity — which is precisely the ground a
 per-field validator cannot see and a similarity score cannot express.
 
