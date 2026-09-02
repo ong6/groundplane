@@ -2,7 +2,22 @@
 
 from __future__ import annotations
 
-__all__ = ["FactBoundaryError", "UnregisteredFact", "UnsupportedClaim"]
+import json
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .boundary import Report
+
+__all__ = ["ClaimsUnsupported", "FactBoundaryError", "UnregisteredFact", "UnsupportedClaim"]
+
+
+def _json_safe(value: object) -> Any:
+    """Return ``value`` if ``json.dumps`` accepts it, else its ``repr``."""
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return repr(value)
+    return value
 
 
 class FactBoundaryError(Exception):
@@ -58,3 +73,26 @@ class UnsupportedClaim(FactBoundaryError):
         if reason:
             parts.append(reason)
         super().__init__(" | ".join(parts))
+
+    def to_dict(self) -> dict[str, Any]:
+        """A JSON-safe rendering; values ``json.dumps`` rejects are stored as their repr."""
+        return {
+            "field": self.field,
+            "claimed": _json_safe(self.claimed),
+            "supported": _json_safe(self.supported),
+            "fact": self.fact,
+            "provenance": self.provenance,
+            "reason": self.reason,
+        }
+
+
+class ClaimsUnsupported(FactBoundaryError):
+    """Raised by ``submit(output, mode="all")`` when one or more checks failed.
+
+    ``report`` is the full :class:`~groundplane.boundary.Report`; ``str()`` of the
+    exception is ``report.to_text()``, one line per violation.
+    """
+
+    def __init__(self, report: Report) -> None:
+        self.report = report
+        super().__init__(report.to_text())

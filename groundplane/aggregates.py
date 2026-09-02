@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 from ._internal import is_number, require_field, require_number, values_close
-from .boundary import Check
+from .boundary import NamedCheck
 from .errors import UnsupportedClaim
 from .registry import FactRegistry
 
@@ -263,7 +263,7 @@ def aggregate_reconciles(
     weight_column: str | None = None,
     tolerance: float = 0.0,
     rel_tolerance: float | None = None,
-) -> Check:
+) -> NamedCheck:
     """Build a boundary check from :func:`check_aggregate_reconciles`."""
     _validate_config(op, column, weight_column)
 
@@ -281,4 +281,4 @@ def aggregate_reconciles(
             rel_tolerance=rel_tolerance,
         )
 
-    return check
+    return NamedCheck(f"aggregate_reconciles(fact={fact!r}, field={field!r})", check)

@@ -87,6 +87,25 @@ provenance=warehouse.query(table='campaign_daily', window='7d') |
 computed argmax on 'ctr' is 'harbour' (0.0455); 'north' ranked #2 at 0.0412
 ```
 
+### Report mode
+
+`submit()` stops at the first unsupported claim. When the output feeds a reask loop, the model
+should see every problem at once, so `report()` runs every check and collects them:
+
+```python
+with boundary(reg, facts=["campaign_ctr"], checks=[superlative(fact="campaign_ctr"), ...]) as b:
+    report = b.report(out)  # never raises for a model mistake
+if not report.ok:
+    reask(report.to_text())  # one line per violation; report.to_dict() for logs
+```
+
+`b.submit(out, mode="all")`, or `boundary(..., mode="all")`, does the same and raises
+`ClaimsUnsupported` whose `str()` is `report.to_text()` and whose `.report` is the `Report`.
+Calling `report()` counts as submitting for the exit check even when it fails: the block was
+checked, and what to do with a failing report is the caller's call. A check that raises anything
+other than `UnsupportedClaim` (a `ValueError` or `KeyError` from a misconfigured check) still
+propagates from `report()` — that is a developer mistake, not a model mistake.
+
 ## Install
 
 ```bash
@@ -108,7 +127,7 @@ readable and testable without either installed.
 | `FactRegistry.record_table(name, rows, key=, tool=, columns=, exhaustive=)` | Register retrieved rows as a `Table`, keyed by one column. `exhaustive=False` marks a truncated result set. |
 | `FactRegistry.record_domain(name, members, tool=, label=)` | Register a closed set of names as a `Domain`. |
 | `FactRegistry.tool(name, fact=)` | Decorator that registers a tool function's return value. |
-| `boundary(reg, facts=, checks=)` | Context manager **and** decorator. Verifies declared facts exist; runs checks on `submit()`; raises if a block exits unchecked. |
+| `boundary(reg, facts=, checks=, require_output=, mode=)` | Context manager **and** decorator, typed: `with ... as b` gives a `Boundary`. Verifies declared facts exist; `b.submit()` runs checks (`mode="first"` raises the first `UnsupportedClaim`, `mode="all"` raises `ClaimsUnsupported` with every violation); `b.report()` returns a `Report` without raising; exiting unchecked raises. |
 | `superlative(fact=, winner_field=, score_field=, rank_field=, tolerance=, rel_tolerance=, allow_tie_pick=, column=, higher_is_better=, on_missing=)` | The argmax guard. Reads a `Ranking`, or a `Table` with `column=`. A row missing the column raises unless `on_missing="skip"`, which warns. |
 | `field_matches_fact(field=, fact=)` | Assert an output field equals a registered value. |
 | `ranking_prefix(fact=, field=, k=, ordered=, allow_tie_pick=, column=, higher_is_better=, on_missing=)` | Top-k guard: a claimed prefix must match the computed ordering, and the cut at k must not fall inside a tie. Reads a `Ranking` or a `Table` column. |
@@ -116,10 +135,13 @@ readable and testable without either installed.
 | `entities_recorded(fields=, fact=, path=, allow_empty=, case_sensitive=)` | Every name the model uses must come from a recorded `Domain`, `Ranking`, or `Table` key column. |
 | `row_integrity(fact=, key_field=, fields=, tolerance=, rel_tolerance=)` | Resolve the named row first, then read every other field off that one row — catches attribute swap. |
 | `comparison(fact=, a_field=, b_field=, delta_field=, column=, kind=, direction=, tolerance=, rel_tolerance=)` | Recompute the delta between two entities in code as `abs`, `pct`, `ratio`, or `pp`; on a mismatch, say which convention the claim actually matches. |
-| `UnsupportedClaim`, `UnregisteredFact` | Failures, both subclasses of `FactBoundaryError`. |
+| `Report` | From `b.report(out)`: `violations`, `passed`, `failed` (check names), `ok`, `to_dict()`, `to_text()`. |
+| `UnsupportedClaim`, `ClaimsUnsupported`, `UnregisteredFact` | Failures, all subclasses of `FactBoundaryError`. `UnsupportedClaim.to_dict()` is JSON-safe; `ClaimsUnsupported.report` holds the full `Report`. |
 
-Each `X(...)` builder has an imperative twin, `check_X(registry, output, ...)`, callable outside a
-boundary. Facts are write-once; one recorded `Table` can back the superlative, ranking, aggregate,
+Each `X(...)` builder returns a `NamedCheck` (`name` like `superlative(fact='campaign_ctr',
+field='winner')`, which is what a `Report` lists) and has an imperative twin,
+`check_X(registry, output, ...)`, callable outside a boundary. A plain
+`(registry, output) -> None` callable is accepted by `checks=` too and is named after its `__name__`. Facts are write-once; one recorded `Table` can back the superlative, ranking, aggregate,
 entity, and row checks at the same time.
 
 Every numeric check takes `tolerance` (absolute) and `rel_tolerance` (relative). Both default to

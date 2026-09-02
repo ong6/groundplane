@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ._internal import is_number, require_field, resolve_ranking, values_close
-from .boundary import Check
+from .boundary import NamedCheck
 from .errors import UnsupportedClaim
 from .registry import FactRegistry, OnMissing
 
@@ -160,7 +160,7 @@ def superlative(
     column: str | None = None,
     higher_is_better: bool | None = None,
     on_missing: OnMissing = "raise",
-) -> Check:
+) -> NamedCheck:
     """Build a boundary check from :func:`check_superlative`."""
 
     def check(registry: FactRegistry, output: Mapping[str, Any]) -> None:
@@ -179,10 +179,10 @@ def superlative(
             on_missing=on_missing,
         )
 
-    return check
+    return NamedCheck(f"superlative(fact={fact!r}, field={winner_field!r})", check)
 
 
-def field_matches_fact(*, field: str, fact: str, path: Sequence[str] = ()) -> Check:
+def field_matches_fact(*, field: str, fact: str, path: Sequence[str] = ()) -> NamedCheck:
     """Build a check asserting ``output[field]`` equals a registered fact's value."""
 
     def check(registry: FactRegistry, output: Mapping[str, Any]) -> None:
@@ -199,4 +199,4 @@ def field_matches_fact(*, field: str, fact: str, path: Sequence[str] = ()) -> Ch
                 provenance=str(registry.get(fact).provenance),
             )
 
-    return check
+    return NamedCheck(f"field_matches_fact(fact={fact!r}, field={field!r})", check)

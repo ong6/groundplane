@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from functools import wraps
 from typing import Any
 
-from ..boundary import Check, boundary
+from ..boundary import Check, CheckFn, boundary
 from ..errors import UnsupportedClaim
 from ..registry import FactRegistry
 
@@ -43,7 +43,7 @@ def guarded_node(
     *,
     registry: FactRegistry,
     facts: Sequence[str] = (),
-    checks: Sequence[Check] = (),
+    checks: Sequence[Check | CheckFn] = (),
     output_key: str | None = None,
     on_violation: OnViolation | None = None,
 ) -> Node:

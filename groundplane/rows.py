@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ._internal import is_number, require_field, require_number, values_close
-from .boundary import Check
+from .boundary import NamedCheck
 from .errors import UnsupportedClaim
 from .registry import FactRegistry, Table
 
@@ -134,7 +134,7 @@ def row_integrity(
     fields: Mapping[str, str],
     tolerance: float = 0.0,
     rel_tolerance: float | None = None,
-) -> Check:
+) -> NamedCheck:
     """Build a boundary check from :func:`check_row_integrity`."""
 
     def check(registry: FactRegistry, output: Mapping[str, Any]) -> None:
@@ -148,4 +148,4 @@ def row_integrity(
             rel_tolerance=rel_tolerance,
         )
 
-    return check
+    return NamedCheck(f"row_integrity(fact={fact!r}, key_field={key_field!r})", check)

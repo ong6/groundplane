@@ -19,7 +19,7 @@ from collections.abc import Hashable, Mapping, Sequence
 from typing import Any
 
 from ._internal import require_field
-from .boundary import Check
+from .boundary import NamedCheck
 from .errors import UnsupportedClaim
 from .registry import Domain, FactRegistry, Ranking, Table
 
@@ -241,7 +241,7 @@ def entities_recorded(
     path: Sequence[str] = (),
     allow_empty: bool = False,
     case_sensitive: bool = True,
-) -> Check:
+) -> NamedCheck:
     """Build a boundary check from :func:`check_entities_recorded`."""
 
     def check(registry: FactRegistry, output: Mapping[str, Any]) -> None:
@@ -255,4 +255,4 @@ def entities_recorded(
             case_sensitive=case_sensitive,
         )
 
-    return check
+    return NamedCheck(f"entities_recorded(fact={fact!r}, fields={list(fields)!r})", check)

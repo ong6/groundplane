@@ -46,7 +46,7 @@ packages = ["groundplane"]
 
 [tool.mypy]
 python_version = "3.10"
-files = ["groundplane"]
+files = ["groundplane", "tests/typing_check.py"]
 disallow_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true

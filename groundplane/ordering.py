@@ -12,7 +12,7 @@ from collections.abc import Hashable, Mapping, Sequence
 from typing import Any, NoReturn
 
 from ._internal import require_field, resolve_ranking
-from .boundary import Check
+from .boundary import NamedCheck
 from .errors import UnsupportedClaim
 from .registry import FactRegistry, OnMissing, Ranking
 
@@ -147,7 +147,7 @@ def ranking_prefix(
     column: str | None = None,
     higher_is_better: bool | None = None,
     on_missing: OnMissing = "raise",
-) -> Check:
+) -> NamedCheck:
     """Build a boundary check from :func:`check_ranking_prefix`."""
     if k is not None and k < 1:
         raise ValueError(f"k must be at least 1, got {k!r}")
@@ -166,4 +166,4 @@ def ranking_prefix(
             on_missing=on_missing,
         )
 
-    return check
+    return NamedCheck(f"ranking_prefix(fact={fact!r}, field={field!r})", check)

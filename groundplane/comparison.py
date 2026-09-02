@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 from ._internal import is_number, require_field, values_close
-from .boundary import Check
+from .boundary import NamedCheck
 from .errors import UnsupportedClaim
 from .registry import FactRegistry, Ranking, Table
 
@@ -268,7 +268,7 @@ def comparison(
     direction: Direction = "a_minus_b",
     tolerance: float = 0.0,
     rel_tolerance: float | None = None,
-) -> Check:
+) -> NamedCheck:
     """Build a boundary check from :func:`check_comparison`."""
     _validate_config(kind, direction)
 
@@ -287,4 +287,4 @@ def comparison(
             rel_tolerance=rel_tolerance,
         )
 
-    return check
+    return NamedCheck(f"comparison(fact={fact!r}, delta_field={delta_field!r})", check)

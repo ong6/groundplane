@@ -9,6 +9,13 @@ All notable changes to this project are documented here. The format follows
 ## [0.1.0] - 2026-09-02
 
 ### Added
+- Named checks and report mode: every builder returns a `NamedCheck` (`Check` protocol with a
+  `name`); `Boundary.report(output)` runs every check and returns a `Report` (`violations`,
+  `passed`, `failed`, `ok`, `to_dict()`, `to_text()`); `submit(output, mode="all")` and
+  `boundary(..., mode="all")` raise `ClaimsUnsupported` carrying that report;
+  `UnsupportedClaim.to_dict()` is JSON-safe. Plain callables are still accepted as checks.
+- `boundary(...)` is typed: it returns `BoundaryDeclaration`, so `with boundary(...) as b` gives a
+  `Boundary` under mypy and the decorator form preserves the wrapped signature.
 - `comparison` check family: recompute the delta between two entities (`abs`, `pct`, `ratio`,
   `pp`) and diagnose the convention the claim actually matches when it mismatches.
 - `higher_is_better` and `on_missing` keywords on `superlative` and `ranking_prefix`;
