@@ -42,3 +42,13 @@ def test_prose_output_is_rejected(registry):
         TypeError, match="free prose"
     ):
         b.submit("Harbour was the best performing campaign.")
+
+
+def test_boundary_declaration_is_reentrant(registry):
+    guard = boundary(registry, facts=["campaign_ctr"], checks=[superlative(fact="campaign_ctr")])
+    with guard as b:
+        b.submit({"winner": b.facts()["campaign_ctr"].winner})
+    with guard as b:
+        b.submit({"winner": b.facts()["campaign_ctr"].winner})
+    with pytest.raises(FactBoundaryError), guard:
+        pass

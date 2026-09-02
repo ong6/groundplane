@@ -103,13 +103,17 @@ def boundary(
         @boundary(reg, facts=["perf"], checks=[superlative(...)])
         def summarize() -> dict: ...
     """
-    cm = _boundary_cm(registry, facts, checks, require_output)
-
     class _Boundary:
+        # A generator-backed context manager is single-use, so one is made per
+        # ``with`` rather than shared across entries of the same declaration.
+        _cm: Any = None
+
         def __enter__(self) -> Boundary:
-            return cm.__enter__()
+            self._cm = _boundary_cm(registry, facts, checks, require_output)
+            return self._cm.__enter__()
 
         def __exit__(self, *exc: Any) -> bool | None:
+            cm, self._cm = self._cm, None
             return cm.__exit__(*exc)
 
         def __call__(
