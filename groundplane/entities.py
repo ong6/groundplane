@@ -15,7 +15,7 @@ and the ranking or row checks at the same time.
 from __future__ import annotations
 
 import difflib
-from collections.abc import Mapping, Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from typing import Any
 
 from ._internal import require_field
@@ -28,16 +28,29 @@ __all__ = ["entities_recorded", "check_entities_recorded"]
 _MAX_RENDERED = 20
 
 
-def _resolve_domain(registry: FactRegistry, fact: str) -> tuple[frozenset[str], str]:
-    """Return the closed name set a fact defines, plus a label for the error text."""
+def _resolve_domain(registry: FactRegistry, fact: str) -> tuple[frozenset[Any], str]:
+    """Return the closed name set a fact defines, plus a label for the error text.
+
+    Names keep the type the code gave them. A ``Ranking`` or ``Table`` keyed by
+    integer ids yields ``int`` members, so a model answering ``101`` is compared
+    with ``101`` and not with ``"101"`` — the same rule the ordering checks follow.
+    """
     value: Any = registry.as_type(fact, Domain, Ranking, Table)
     if isinstance(value, Domain):
         return value.members, value.label
     names = value.names if isinstance(value, Ranking) else value.keys
-    return frozenset(str(name) for name in names), "entity"
+    return frozenset(names), "entity"
 
 
-def _render(members: Sequence[str]) -> list[str]:
+def _sorted_members(members: frozenset[Any]) -> tuple[Any, ...]:
+    """A stable order for the error text; mixed types fall back to their repr."""
+    try:
+        return tuple(sorted(members))
+    except TypeError:
+        return tuple(sorted(members, key=repr))
+
+
+def _render(members: Sequence[Any]) -> list[Any]:
     """The domain as it should appear in a reask prompt: readable, never unbounded."""
     if len(members) <= _MAX_RENDERED:
         return list(members)
@@ -78,7 +91,7 @@ def _reject(
     *,
     fact: str,
     provenance: str,
-    members: Sequence[str],
+    members: Sequence[Any],
     reason: str,
 ) -> None:
     raise UnsupportedClaim(
@@ -97,13 +110,34 @@ def _check_name(
     field: str,
     fact: str,
     provenance: str,
-    members: Sequence[str],
+    members: Sequence[Any],
     lookup: Mapping[str, str],
     label: str,
     case_sensitive: bool,
 ) -> None:
-    """Fail unless ``claimed`` is a recorded name, spelling rules applied."""
+    """Fail unless ``claimed`` is a recorded name, spelling rules applied.
+
+    Spelling rules (case folding) are a property of strings, so they apply only
+    to string names. Any other name must match a recorded member of the same
+    type exactly: ``101`` matches the recorded id ``101``, and neither ``"101"``
+    nor ``101.0`` nor ``True`` (which Python would otherwise count as ``1``) does.
+    """
     if not isinstance(claimed, str):
+        if not isinstance(claimed, Hashable):
+            _reject(
+                field,
+                claimed,
+                fact=fact,
+                provenance=provenance,
+                members=members,
+                reason=(
+                    f"claimed {label} is a {type(claimed).__name__}, not a name; "
+                    f"only recorded {label} names may be used"
+                ),
+            )
+            return
+        if any(type(member) is type(claimed) and member == claimed for member in members):
+            return
         _reject(
             field,
             claimed,
@@ -111,15 +145,16 @@ def _check_name(
             provenance=provenance,
             members=members,
             reason=(
-                f"claimed {label} is a {type(claimed).__name__}, not a name; "
-                f"only recorded {label} names may be used"
+                f"{claimed!r} is a {type(claimed).__name__} and not a name recorded as a "
+                f"{label}; only recorded {label} names may be used"
             ),
         )
         return
     probe = claimed if case_sensitive else claimed.casefold()
     if probe in lookup:
         return
-    near = difflib.get_close_matches(claimed, list(members), n=1, cutoff=0.6)
+    spelled = [member for member in members if isinstance(member, str)]
+    near = difflib.get_close_matches(claimed, spelled, n=1, cutoff=0.6)
     hint = f"; did you mean {near[0]!r}?" if near else ""
     _reject(
         field,
@@ -150,10 +185,13 @@ def check_entities_recorded(
     empty list asserts that nothing qualified.
     """
     members_set, label = _resolve_domain(registry, fact)
-    members = tuple(sorted(members_set))
+    members = _sorted_members(members_set)
     provenance = str(registry.get(fact).provenance)
+    spelled = [name for name in members if isinstance(name, str)]
     lookup: dict[str, str] = (
-        {name: name for name in members} if case_sensitive else {n.casefold(): n for n in members}
+        {name: name for name in spelled}
+        if case_sensitive
+        else {name.casefold(): name for name in spelled}
     )
     scope = _traverse(output, path, fact) if path else output
 

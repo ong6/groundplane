@@ -6,13 +6,58 @@ is (name, value, provenance) where provenance names the tool call that produced 
 
 from __future__ import annotations
 
+import math
+import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from .errors import UnregisteredFact
 
-__all__ = ["Fact", "Provenance", "FactRegistry", "Ranking", "Table", "Domain"]
+__all__ = [
+    "Fact",
+    "Provenance",
+    "FactRegistry",
+    "Ranking",
+    "Table",
+    "Domain",
+    "SparseColumnWarning",
+]
+
+OnMissing = Literal["raise", "skip"]
+
+
+class SparseColumnWarning(UserWarning):
+    """A ranking was derived from only the rows that carry the ranked column.
+
+    Emitted by :meth:`Table.to_ranking` under ``on_missing="skip"``. The rows it
+    names were never scored, so the argmax is an argmax over a subset and any
+    check built on it is only as good as the caller's reason for skipping them.
+    """
+
+
+def require_number(value: Any, *, column: str, key: Any, fact: str | None = None) -> float:
+    """``value`` as a float, or a ``ValueError`` that says which cell was bad.
+
+    Every place that turns a recorded cell into arithmetic goes through here, so
+    a ``None`` from a left join, a ``"n/a"`` string, or a ``NaN`` from a broken
+    division fails naming the fact, column and row instead of as a bare
+    ``TypeError`` three frames deep. Booleans are refused too: ``True`` is a flag
+    that Python happens to spell as ``1``, not a score.
+
+    Non-finite values are refused rather than coerced because neither ``sorted``
+    nor ``==`` has a defensible answer for them: NaN sorts wherever it lands and
+    equals nothing, so a ranking or a tie built on one is not a fact.
+    """
+    where = f"column {column!r} row {key!r}"
+    if fact is not None:
+        where = f"fact {fact!r} {where}"
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{where}: value {value!r} is not a number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{where}: value {value!r} is not finite")
+    return number
 
 
 def _join(parts: Iterable[str]) -> str:
@@ -137,11 +182,50 @@ class Table:
             raise KeyError(f"column {name!r} not in table; columns: {list(self.columns)}")
         return tuple(row[name] for row in self.rows if name in row)
 
-    def to_ranking(self, column: str, *, higher_is_better: bool = True) -> Ranking:
-        """Order the rows by ``column``, in code, as a :class:`Ranking`."""
+    def to_ranking(
+        self,
+        column: str,
+        *,
+        higher_is_better: bool = True,
+        on_missing: OnMissing = "raise",
+    ) -> Ranking:
+        """Order the rows by ``column``, in code, as a :class:`Ranking`.
+
+        A row without ``column`` cannot be placed, and an argmax that quietly
+        leaves it out is a confident answer over a subset — exactly the shape of
+        claim this library exists to refuse. So the default, ``on_missing="raise"``,
+        refuses to rank at all and names the rows it would have dropped. Pass
+        ``on_missing="skip"`` to rank the rows that do carry the column; the
+        dropped keys are then reported through a :class:`SparseColumnWarning`
+        rather than silently.
+
+        Every ranked cell must be a finite number; ``None``, strings, booleans and
+        NaN raise ``ValueError`` naming the row (see :func:`require_number`).
+        """
         if column not in self.columns:
             raise KeyError(f"column {column!r} not in table; columns: {list(self.columns)}")
-        pairs = [(row[self.key], float(row[column])) for row in self.rows if column in row]
+        if on_missing not in ("raise", "skip"):
+            raise ValueError(f"on_missing must be 'raise' or 'skip', got {on_missing!r}")
+        missing = [row[self.key] for row in self.rows if column not in row]
+        if missing:
+            if on_missing == "raise":
+                raise ValueError(
+                    f"column {column!r} is missing on rows {missing!r}; a ranking over the "
+                    "remaining rows would be an argmax over a subset "
+                    "(pass on_missing='skip' to rank only the rows that carry it)"
+                )
+            warnings.warn(
+                SparseColumnWarning(
+                    f"ranking on column {column!r} skipped rows {missing!r} that do not "
+                    "carry it; the argmax covers a subset of the table"
+                ),
+                stacklevel=2,
+            )
+        pairs = [
+            (row[self.key], require_number(row[column], column=column, key=row[self.key]))
+            for row in self.rows
+            if column in row
+        ]
         if not pairs:
             raise ValueError(f"no row carries column {column!r}; nothing to rank")
         ordered = tuple(sorted(pairs, key=lambda kv: kv[1], reverse=higher_is_better))
@@ -235,10 +319,29 @@ class FactRegistry:
 
         This is the deterministic half of the superlative guard: the ordering is
         never taken from the model, only ever computed here.
+
+        Each entity may be scored once — a repeated name would make ``rank_of`` and
+        ``score_of`` answer for whichever copy sorted first — and every score must
+        be a finite number, because NaN sorts arbitrarily and ties with nothing, so
+        an ordering containing one is not an ordering.
         """
         pairs = list(scores.items()) if isinstance(scores, Mapping) else list(scores)
         if not pairs:
             raise ValueError(f"cannot rank an empty score set for fact {name!r}")
+
+        seen: set[Any] = set()
+        duplicates: list[Any] = []
+        for entity, score in pairs:
+            if entity in seen and entity not in duplicates:
+                duplicates.append(entity)
+            seen.add(entity)
+            require_number(score, column=key, key=entity, fact=name)
+        if duplicates:
+            raise ValueError(
+                f"names {duplicates!r} appear more than once in fact {name!r}; "
+                "a ranking scores each entity once"
+            )
+
         ordered = tuple(sorted(pairs, key=lambda kv: kv[1], reverse=higher_is_better))
         ranking = Ranking(key=key, items=ordered, higher_is_better=higher_is_better)
         return self.record(name, ranking, tool=tool, args=args)
@@ -272,9 +375,7 @@ class FactRegistry:
                     seen_columns.append(column)
         resolved = tuple(columns) if columns is not None else tuple(seen_columns)
         if key not in resolved:
-            raise ValueError(
-                f"key column {key!r} is not among the table columns {list(resolved)}"
-            )
+            raise ValueError(f"key column {key!r} is not among the table columns {list(resolved)}")
 
         seen_keys: set[Any] = set()
         for i, row in enumerate(materialised):

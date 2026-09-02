@@ -13,6 +13,7 @@ from groundplane import (
     field_matches_fact,
     superlative,
 )
+from groundplane.registry import SparseColumnWarning
 
 
 def _run(registry, output, **kw):
@@ -127,3 +128,57 @@ def test_superlative_over_a_table_fact():
         check_superlative(reg, {"winner": "north"}, fact="campaign_rows", column="ctr")
     with pytest.raises(ValueError, match="pass column="):
         check_superlative(reg, {"winner": "harbour"}, fact="campaign_rows")
+
+
+# 10. Direction flip over a Table: "fastest" is the lowest p99, and until the check
+# could say so a table-backed superlative always crowned the slowest region.
+def test_lower_is_better_over_a_table_fact():
+    reg = FactRegistry()
+    reg.record_table(
+        "latency",
+        [
+            {"region": "eu", "p99_ms": 120.0},
+            {"region": "us", "p99_ms": 88.0},
+            {"region": "apac", "p99_ms": 210.0},
+        ],
+        key="region",
+        tool="metrics.p99",
+    )
+    check_superlative(
+        reg, {"winner": "us"}, fact="latency", column="p99_ms", higher_is_better=False
+    )
+    with pytest.raises(UnsupportedClaim) as exc:
+        check_superlative(
+            reg, {"winner": "apac"}, fact="latency", column="p99_ms", higher_is_better=False
+        )
+    assert "'us'" in str(exc.value)
+    superlative(fact="latency", column="p99_ms", higher_is_better=False)(reg, {"winner": "us"})
+
+
+def test_higher_is_better_contradicting_a_ranking_raises():
+    reg = FactRegistry()
+    reg.record_ranking(
+        "latency",
+        {"eu": 120.0, "us": 88.0},
+        key="p99_ms",
+        tool="metrics.p99",
+        higher_is_better=False,
+    )
+    with pytest.raises(ValueError, match="recorded with higher_is_better=False"):
+        check_superlative(reg, {"winner": "us"}, fact="latency", higher_is_better=True)
+
+
+# 11. A sparse ranking column: the superlative guard refuses a subset argmax by default
+# and only ranks the rows that carry the column when told to, with a warning.
+def test_sparse_column_refused_unless_skipped():
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign_rows",
+        [{"campaign": "north", "ctr": 0.04}, {"campaign": "harbour"}],
+        key="campaign",
+        tool="warehouse.query",
+    )
+    with pytest.raises(ValueError, match="missing on rows \\['harbour'\\]"):
+        check_superlative(reg, {"winner": "north"}, fact="campaign_rows", column="ctr")
+    with pytest.warns(SparseColumnWarning):
+        superlative(fact="campaign_rows", column="ctr", on_missing="skip")(reg, {"winner": "north"})

@@ -19,7 +19,7 @@ from typing import Any
 from ._internal import is_number, require_field, resolve_ranking, values_close
 from .boundary import Check
 from .errors import UnsupportedClaim
-from .registry import FactRegistry
+from .registry import FactRegistry, OnMissing
 
 __all__ = ["superlative", "field_matches_fact", "check_superlative"]
 
@@ -36,6 +36,8 @@ def check_superlative(
     rel_tolerance: float | None = None,
     allow_tie_pick: bool = False,
     column: str | None = None,
+    higher_is_better: bool | None = None,
+    on_missing: OnMissing = "raise",
 ) -> None:
     """Verify a claimed "best X" against the argmax the code computed.
 
@@ -45,6 +47,11 @@ def check_superlative(
 
     ``fact`` may be a ``Ranking`` or, with ``column=``, a recorded ``Table`` — the
     same two shapes :func:`~groundplane.ordering.check_ranking_prefix` accepts.
+    ``higher_is_better=False`` says the lowest value wins (latency, cost); it is
+    required for a ``Table`` whose "best" is a minimum, and must agree with the
+    recorded direction of a ``Ranking``. ``on_missing`` decides what a ``Table``
+    row without ``column`` means: ``"raise"`` (default) refuses to rank a subset,
+    ``"skip"`` ranks the rows that carry it and warns.
 
     ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
     straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
@@ -55,7 +62,9 @@ def check_superlative(
     policy, and a policy belongs in the caller's hands. Pass ``rel_tolerance=1e-9``
     explicitly to get the stdlib behaviour.
     """
-    ranking = resolve_ranking(registry, fact, column)
+    ranking = resolve_ranking(
+        registry, fact, column, higher_is_better=higher_is_better, on_missing=on_missing
+    )
     provenance = str(registry.get(fact).provenance)
     claimed = require_field(output, winner_field)
 
@@ -149,6 +158,8 @@ def superlative(
     rel_tolerance: float | None = None,
     allow_tie_pick: bool = False,
     column: str | None = None,
+    higher_is_better: bool | None = None,
+    on_missing: OnMissing = "raise",
 ) -> Check:
     """Build a boundary check from :func:`check_superlative`."""
 
@@ -164,6 +175,8 @@ def superlative(
             rel_tolerance=rel_tolerance,
             allow_tie_pick=allow_tie_pick,
             column=column,
+            higher_is_better=higher_is_better,
+            on_missing=on_missing,
         )
 
     return check

@@ -14,7 +14,7 @@ from typing import Any, NoReturn
 from ._internal import require_field, resolve_ranking
 from .boundary import Check
 from .errors import UnsupportedClaim
-from .registry import FactRegistry, Ranking
+from .registry import FactRegistry, OnMissing, Ranking
 
 __all__ = ["ranking_prefix", "check_ranking_prefix"]
 
@@ -40,14 +40,23 @@ def check_ranking_prefix(
     ordered: bool = True,
     allow_tie_pick: bool = False,
     column: str | None = None,
+    higher_is_better: bool | None = None,
+    on_missing: OnMissing = "raise",
 ) -> None:
     """Verify a claimed top-k list against the ranking the code computed.
 
     Raises :class:`UnsupportedClaim` when the claim is not a list, has the wrong
     length for ``k``, repeats a name, names an entity that outranks nothing it was
     placed above, or cuts through a block of tied scores (unless ``allow_tie_pick``).
+
+    ``higher_is_better`` and ``on_missing`` mean what they mean for
+    :func:`~groundplane.checks.check_superlative`: the direction "top" points in,
+    and whether a ``Table`` row without ``column`` refuses the ranking or is
+    skipped with a warning.
     """
-    ranking = resolve_ranking(registry, fact, column)
+    ranking = resolve_ranking(
+        registry, fact, column, higher_is_better=higher_is_better, on_missing=on_missing
+    )
     provenance = str(registry.get(fact).provenance)
     claimed = require_field(output, field)
 
@@ -114,10 +123,7 @@ def check_ranking_prefix(
 
     allowed = {name for block in covering for name in block}
     required = {
-        name
-        for block in covering
-        if not (block is last_block and cut_inside)
-        for name in block
+        name for block in covering if not (block is last_block and cut_inside) for name in block
     }
     for name in items:
         if name not in allowed:
@@ -139,6 +145,8 @@ def ranking_prefix(
     ordered: bool = True,
     allow_tie_pick: bool = False,
     column: str | None = None,
+    higher_is_better: bool | None = None,
+    on_missing: OnMissing = "raise",
 ) -> Check:
     """Build a boundary check from :func:`check_ranking_prefix`."""
     if k is not None and k < 1:
@@ -154,6 +162,8 @@ def ranking_prefix(
             ordered=ordered,
             allow_tie_pick=allow_tie_pick,
             column=column,
+            higher_is_better=higher_is_better,
+            on_missing=on_missing,
         )
 
     return check

@@ -137,9 +137,37 @@ def test_unknown_column_is_a_developer_error(registry):
 
 
 def test_builder_matches_imperative(registry):
-    check = row_integrity(
-        fact="campaign_rows", key_field="winner", fields={"spend": "spend"}
-    )
+    check = row_integrity(fact="campaign_rows", key_field="winner", fields={"spend": "spend"})
     check(registry, {"winner": "harbour", "spend": 61200})
     with pytest.raises(UnsupportedClaim):
         check(registry, {"winner": "harbour", "spend": 88000})
+
+
+# A null or NaN cell where the model claimed a number: the table can neither support
+# nor refute the claim, so it is a data error naming the cell, not a model failure.
+@pytest.mark.parametrize("bad", [None, float("nan"), float("inf")])
+def test_null_or_non_finite_recorded_cell_is_a_data_error(bad):
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign",
+        [{"campaign": "north", "ctr": bad}],
+        key="campaign",
+        tool="warehouse.query",
+    )
+    with pytest.raises(ValueError, match="fact 'campaign' column 'ctr' row 'north'"):
+        check_row_integrity(
+            reg,
+            {"winner": "north", "ctr": 0.04},
+            fact="campaign",
+            key_field="winner",
+            fields={"ctr": "ctr"},
+        )
+    # A non-numeric claim against the same cell is still judged as a claim.
+    with pytest.raises(UnsupportedClaim):
+        check_row_integrity(
+            reg,
+            {"winner": "north", "ctr": "high"},
+            fact="campaign",
+            key_field="winner",
+            fields={"ctr": "ctr"},
+        )

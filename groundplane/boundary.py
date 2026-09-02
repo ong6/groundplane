@@ -103,6 +103,7 @@ def boundary(
         @boundary(reg, facts=["perf"], checks=[superlative(...)])
         def summarize() -> dict: ...
     """
+
     class _Boundary:
         # A generator-backed context manager is single-use, so one is made per
         # ``with`` rather than shared across entries of the same declaration.

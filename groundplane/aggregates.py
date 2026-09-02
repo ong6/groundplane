@@ -17,7 +17,7 @@ import statistics
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from ._internal import is_number, require_field, values_close
+from ._internal import is_number, require_field, require_number, values_close
 from .boundary import Check
 from .errors import UnsupportedClaim
 from .registry import FactRegistry
@@ -69,7 +69,9 @@ def check_aggregate_reconciles(
 
     Raises :class:`UnsupportedClaim` when the arithmetic does not reconcile, when
     the filter selects no rows, when the aggregated column is incomplete, or when
-    the recorded table was not exhaustive.
+    the recorded table was not exhaustive. A recorded cell that is not a finite
+    number where one is needed (``None``, a string, NaN) is a data problem rather
+    than a model claim and raises ``ValueError`` naming the fact, column and row.
 
     ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
     straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
@@ -142,9 +144,13 @@ def check_aggregate_reconciles(
     if column not in table.columns:
         raise KeyError(f"column {column!r} not in table; columns: {list(table.columns)}")
 
+    # No op survives a hole in its column. A sum or mean under-counts, obviously;
+    # but a min, max or median is just as exposed, because the row without a value
+    # is exactly the one that might hold the extremum or shift the midpoint. The
+    # honest answer over a partial column is "not verifiable", for every op.
     present = [row for row in rows if column in row]
     missing = len(rows) - len(present)
-    if missing and op in ("sum", "mean"):
+    if missing:
         raise UnsupportedClaim(
             field,
             claimed,
@@ -153,20 +159,14 @@ def check_aggregate_reconciles(
             provenance=provenance,
             reason=(
                 f"{missing} of {len(rows)} selected rows have no {column!r}; a {op} over a "
-                "partial column would be a silent lie"
+                "partial column would be a silent lie (the missing row could be the one "
+                "that changes it)"
             ),
         )
 
-    values = [float(row[column]) for row in present]
-    if not values:
-        raise UnsupportedClaim(
-            field,
-            claimed,
-            "no rows",
-            fact=fact,
-            provenance=provenance,
-            reason=f"no selected row carries column {column!r}",
-        )
+    values = [
+        require_number(row[column], column=column, key=row[table.key], fact=fact) for row in present
+    ]
 
     naive_mean: float | None = None
     if op == "sum":
@@ -186,7 +186,13 @@ def check_aggregate_reconciles(
                 raise KeyError(
                     f"column {weight_column!r} not in table; columns: {list(table.columns)}"
                 )
-            weights = [float(row[weight_column]) for row in present if weight_column in row]
+            weights = [
+                require_number(
+                    row[weight_column], column=weight_column, key=row[table.key], fact=fact
+                )
+                for row in present
+                if weight_column in row
+            ]
             if len(weights) != len(present):
                 raise UnsupportedClaim(
                     field,
@@ -205,13 +211,10 @@ def check_aggregate_reconciles(
                     fact=fact,
                     provenance=provenance,
                     reason=(
-                        f"total weight on {weight_column!r} is zero; "
-                        "a weighted mean is undefined"
+                        f"total weight on {weight_column!r} is zero; a weighted mean is undefined"
                     ),
                 )
-            computed = (
-                math.fsum(v * w for v, w in zip(values, weights, strict=True)) / total_weight
-            )
+            computed = math.fsum(v * w for v, w in zip(values, weights, strict=True)) / total_weight
 
     if not is_number(claimed):
         raise UnsupportedClaim(

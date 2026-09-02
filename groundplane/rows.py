@@ -9,10 +9,11 @@ one row, can see it.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
-from ._internal import is_number, require_field, values_close
+from ._internal import is_number, require_field, require_number, values_close
 from .boundary import Check
 from .errors import UnsupportedClaim
 from .registry import FactRegistry, Table
@@ -65,6 +66,10 @@ def check_row_integrity(
     disagrees with the resolved row — naming the row the value actually came from when
     it belongs to a different one.
 
+    When the model claims a number and the recorded cell is ``None`` or not finite,
+    the table cannot support or refute the claim: that is a data problem, raised as
+    ``ValueError`` naming the fact, column and row, not as a model failure.
+
     ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
     straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
 
@@ -97,6 +102,10 @@ def check_row_integrity(
             raise KeyError(f"column {column!r} not in table; columns: {list(table.columns)}")
         claimed = require_field(output, out_field)
         recorded = row[column]
+        if is_number(claimed) and (
+            recorded is None or (is_number(recorded) and not math.isfinite(recorded))
+        ):
+            require_number(recorded, column=column, key=claimed_key, fact=fact)
         if _values_match(claimed, recorded, tolerance=tolerance, rel_tolerance=rel_tolerance):
             continue
         source = _other_row_with(table, column, claimed, exclude=claimed_key)

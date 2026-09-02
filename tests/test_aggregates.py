@@ -252,7 +252,12 @@ def test_weight_column_on_non_mean_raises_at_builder_time():
 
 
 # A partial column silently under-totals; a sum over it is a lie with a number on it.
-def test_sum_over_partial_column_raises():
+# The same goes for every other op. This test used to assert that a max over the rows
+# that do carry the column was "well defined" — it is not: the row without a value is
+# exactly the one that might hold the extremum, and a median shifts with every row
+# that is or is not counted. No op can vouch for a number over a column with holes.
+@pytest.mark.parametrize("op", ["sum", "mean", "min", "max", "median"])
+def test_any_aggregate_over_partial_column_raises(op):
     reg = FactRegistry()
     reg.record_table(
         "sparse",
@@ -260,14 +265,54 @@ def test_sum_over_partial_column_raises():
         key="k",
         tool="warehouse.query",
     )
-    with pytest.raises(UnsupportedClaim, match="partial column"):
+    with pytest.raises(UnsupportedClaim, match="partial column") as exc:
         check_aggregate_reconciles(
-            reg, {"total": 3.0}, fact="sparse", field="total", column="v", op="sum"
+            reg, {"figure": 2.0}, fact="sparse", field="figure", column="v", op=op
         )
-    # ...but an extremum over the rows that do carry the column is well defined.
-    check_aggregate_reconciles(
-        reg, {"top": 2.0}, fact="sparse", field="top", column="v", op="max"
+    assert "1 of 3" in str(exc.value)
+
+
+# A left join left a null in the column. That is a data problem, and the error must say
+# which cell, not surface as a TypeError from float() somewhere inside the checker.
+@pytest.mark.parametrize("bad", [None, "n/a", float("nan"), True])
+def test_non_numeric_cell_names_fact_column_and_row(bad):
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign",
+        [{"campaign": "north", "ctr": bad}, {"campaign": "harbour", "ctr": 0.0455}],
+        key="campaign",
+        tool="warehouse.query",
     )
+    with pytest.raises(ValueError) as exc:
+        check_aggregate_reconciles(
+            reg, {"best": 0.0455}, fact="campaign", field="best", column="ctr", op="max"
+        )
+    msg = str(exc.value)
+    assert "fact 'campaign' column 'ctr' row 'north'" in msg
+    assert "is not a number" in msg or "is not finite" in msg
+
+
+def test_non_numeric_weight_cell_names_the_row(registry):
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign",
+        [
+            {"campaign": "north", "ctr": 0.04, "conversions": None},
+            {"campaign": "harbour", "ctr": 0.05, "conversions": 10},
+        ],
+        key="campaign",
+        tool="warehouse.query",
+    )
+    with pytest.raises(ValueError, match="column 'conversions' row 'north'"):
+        check_aggregate_reconciles(
+            reg,
+            {"ctr": 0.05},
+            fact="campaign",
+            field="ctr",
+            column="ctr",
+            op="mean",
+            weight_column="conversions",
+        )
 
 
 # The field simply isn't there: an unverifiable claim is a failed claim.
@@ -306,9 +351,7 @@ def test_median_of_even_count_is_the_midpoint(registry):
 
 
 def test_builder_runs_as_a_boundary_check(registry):
-    check = aggregate_reconciles(
-        fact="campaigns", field="total", column="conversions", op="sum"
-    )
+    check = aggregate_reconciles(fact="campaigns", field="total", column="conversions", op="sum")
     check(registry, {"total": 17910})
     with pytest.raises(UnsupportedClaim):
         check(registry, {"total": 17911})

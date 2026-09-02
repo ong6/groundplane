@@ -7,6 +7,7 @@ import pytest
 
 from groundplane import FactRegistry, UnsupportedClaim, boundary, superlative
 from groundplane.ordering import check_ranking_prefix, ranking_prefix
+from groundplane.registry import SparseColumnWarning
 
 # Same shape as the superlative fixtures: "north" is the famous campaign, "harbour"
 # is the argmax, and "delta" is the plausible-sounding interloper that is really #4.
@@ -176,3 +177,77 @@ def test_superlative_on_int_keys():
     superlative(fact="campaign_ctr")(reg, {"winner": 101})
     with pytest.raises(UnsupportedClaim, match="never ranked"):
         superlative(fact="campaign_ctr")(reg, {"winner": "101"})
+
+
+# 12. "Fastest region" over a latency table: best is the *lowest* number, and a
+# table-backed check had no way to say so — it always ranked descending.
+def test_lower_is_better_over_a_table():
+    reg = FactRegistry()
+    reg.record_table(
+        "latency",
+        [
+            {"region": "eu", "p99_ms": 120.0},
+            {"region": "us", "p99_ms": 88.0},
+            {"region": "apac", "p99_ms": 210.0},
+        ],
+        key="region",
+        tool="metrics.p99",
+    )
+    kw = {"fact": "latency", "field": "top", "column": "p99_ms", "k": 2}
+    check_ranking_prefix(reg, {"top": ["us", "eu"]}, higher_is_better=False, **kw)
+    with pytest.raises(UnsupportedClaim) as exc:
+        check_ranking_prefix(reg, {"top": ["apac", "eu"]}, higher_is_better=False, **kw)
+    assert "'apac'" in str(exc.value) and "#3" in str(exc.value)
+    # The builder forwards it too.
+    ranking_prefix(higher_is_better=False, **kw)(reg, {"top": ["us", "eu"]})
+    # ...and left unspecified, a table still ranks descending.
+    with pytest.raises(UnsupportedClaim):
+        check_ranking_prefix(reg, {"top": ["us", "eu"]}, **kw)
+
+
+# 13. A Ranking already knows its direction. A check that says otherwise is a wiring
+# bug and must not quietly re-sort or, worse, be ignored.
+def test_higher_is_better_contradicting_a_ranking_is_a_config_error():
+    reg = FactRegistry()
+    reg.record_ranking(
+        "latency",
+        {"eu": 120.0, "us": 88.0, "apac": 210.0},
+        key="p99_ms",
+        tool="metrics.p99",
+        higher_is_better=False,
+    )
+    with pytest.raises(ValueError, match="recorded with higher_is_better=False"):
+        check_ranking_prefix(
+            reg, {"top": ["us"]}, fact="latency", field="top", higher_is_better=True
+        )
+    # Agreeing with the recorded direction is fine, as is leaving it to the fact.
+    check_ranking_prefix(reg, {"top": ["us"]}, fact="latency", field="top", higher_is_better=False)
+    check_ranking_prefix(reg, {"top": ["us"]}, fact="latency", field="top")
+
+
+def test_on_missing_on_a_ranking_fact_is_a_config_error(registry):
+    with pytest.raises(ValueError, match="on_missing='skip' applies only to a Table"):
+        check_ranking_prefix(
+            registry, {"top": ["harbour"]}, fact="campaign_ctr", field="top", on_missing="skip"
+        )
+
+
+# 14. A row with no CTR must not vanish from a table-backed top-k: by default the
+# check refuses, and with on_missing="skip" it warns while ranking the rest.
+def test_sparse_column_in_table_backed_prefix():
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign_rows",
+        [
+            {"campaign": "north", "ctr": 0.04},
+            {"campaign": "harbour"},
+            {"campaign": "delta", "ctr": 0.03},
+        ],
+        key="campaign",
+        tool="warehouse.query",
+    )
+    kw = {"fact": "campaign_rows", "field": "top", "column": "ctr"}
+    with pytest.raises(ValueError, match="fact 'campaign_rows': column 'ctr' is missing"):
+        check_ranking_prefix(reg, {"top": ["north"]}, **kw)
+    with pytest.warns(SparseColumnWarning):
+        check_ranking_prefix(reg, {"top": ["north"]}, on_missing="skip", **kw)

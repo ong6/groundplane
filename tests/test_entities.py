@@ -157,3 +157,44 @@ def test_builder_passes_valid_names(domain_registry: FactRegistry) -> None:
     entities_recorded(fields=["winner"], fact="campaigns")(
         domain_registry, {"winner": "harbour", "regions": ["apac"]}
     )
+
+
+# 13. Integer row ids stay integers: a model answering 101 must pass against a table
+# keyed by int, and the stringified "101" must not quietly pass as the same entity.
+# Mirrors test_int_row_keys_are_not_stringified in test_ordering.py.
+def test_int_row_keys_are_not_stringified() -> None:
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign_rows",
+        [{"id": 101, "ctr": 0.0455}, {"id": 102, "ctr": 0.0412}, {"id": 103, "ctr": 0.0301}],
+        key="id",
+        tool="warehouse.query",
+    )
+    _run(reg, {"winner": 101, "top": [101, 102]}, fields=["winner", "top"], fact="campaign_rows")
+    with pytest.raises(UnsupportedClaim, match="'101'"):
+        _run(reg, {"winner": "101"}, fields=["winner"], fact="campaign_rows")
+    with pytest.raises(UnsupportedClaim) as exc:
+        _run(reg, {"winner": 104}, fields=["winner"], fact="campaign_rows")
+    assert exc.value.supported == [101, 102, 103]
+    # 101.0 == 101 and True == 1 in Python; neither is the recorded id.
+    with pytest.raises(UnsupportedClaim, match="float"):
+        _run(reg, {"winner": 101.0}, fields=["winner"], fact="campaign_rows")
+
+
+def test_int_names_in_a_ranking_fact() -> None:
+    reg = FactRegistry()
+    reg.record_ranking("r", {101: 0.0455, 102: 0.0412}, key="ctr", tool="warehouse.query")
+    _run(reg, {"winner": 101}, fields=["winner"], fact="r")
+    with pytest.raises(UnsupportedClaim):
+        _run(reg, {"winner": "101"}, fields=["winner"], fact="r")
+
+
+# Case folding is a string rule; it must not crash on, or apply to, non-string names.
+def test_case_insensitive_lookup_with_int_names() -> None:
+    reg = FactRegistry()
+    reg.record_table(
+        "t", [{"id": 7, "name": "North"}, {"id": 8, "name": "Harbour"}], key="id", tool="x"
+    )
+    _run(reg, {"winner": 7}, fields=["winner"], fact="t", case_sensitive=False)
+    with pytest.raises(UnsupportedClaim):
+        _run(reg, {"winner": "7"}, fields=["winner"], fact="t", case_sensitive=False)

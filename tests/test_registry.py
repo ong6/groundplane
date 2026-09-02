@@ -1,6 +1,9 @@
+import math
+
 import pytest
 
 from groundplane import FactRegistry, Ranking, Table, UnregisteredFact
+from groundplane.registry import SparseColumnWarning
 
 
 def test_record_captures_provenance():
@@ -156,3 +159,98 @@ def test_as_type_is_the_single_typed_accessor(registry):
     registry.record("total", 42, tool="a")
     with pytest.raises(TypeError, match="not a Ranking or Table"):
         registry.as_type("total", Ranking, Table)
+
+
+# A tool returned three campaigns but only two carried a CTR. Ranking the two and
+# calling the winner "the best of three" is the confident-subset error; the default
+# refuses and names the row it would have dropped.
+def test_to_ranking_refuses_a_sparse_column_by_default():
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign_rows",
+        [
+            {"campaign": "north", "ctr": 0.04},
+            {"campaign": "harbour"},
+            {"campaign": "delta", "ctr": 0.03},
+        ],
+        key="campaign",
+        tool="warehouse.query",
+    )
+    with pytest.raises(ValueError, match=r"column 'ctr' is missing on rows \['harbour'\]"):
+        reg.table("campaign_rows").to_ranking("ctr")
+
+
+# The caller may opt in to a subset ranking, but never silently: the skipped keys are
+# reported through a warning that can be turned into an error by a strict test suite.
+def test_to_ranking_skip_warns_with_the_dropped_keys():
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign_rows",
+        [
+            {"campaign": "north", "ctr": 0.04},
+            {"campaign": "harbour"},
+            {"campaign": "delta", "ctr": 0.03},
+        ],
+        key="campaign",
+        tool="warehouse.query",
+    )
+    with pytest.warns(SparseColumnWarning, match=r"skipped rows \['harbour'\]"):
+        ranking = reg.table("campaign_rows").to_ranking("ctr", on_missing="skip")
+    assert ranking.names == ("north", "delta")
+    assert issubclass(SparseColumnWarning, UserWarning)
+
+
+def test_to_ranking_rejects_an_unknown_on_missing_policy():
+    reg = FactRegistry()
+    reg.record_table("t", [{"k": "a", "v": 1}], key="k", tool="x")
+    with pytest.raises(ValueError, match="on_missing must be"):
+        reg.table("t").to_ranking("v", on_missing="ignore")  # type: ignore[arg-type]
+
+
+# Two rows for the same entity would make rank_of and score_of answer for whichever
+# copy sorted first; record_table already refuses this and record_ranking must too.
+def test_record_ranking_rejects_duplicate_names():
+    reg = FactRegistry()
+    with pytest.raises(ValueError, match=r"names \['north'\] appear more than once"):
+        reg.record_ranking(
+            "campaign_ctr",
+            [("north", 0.04), ("harbour", 0.05), ("north", 0.06)],
+            key="ctr",
+            tool="warehouse.query",
+        )
+
+
+# A NaN score sorts wherever it lands and equals nothing, so a ranking holding one
+# has no winner and no ties. Refuse it at record time, naming the entity.
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_record_ranking_rejects_non_finite_scores(bad):
+    reg = FactRegistry()
+    with pytest.raises(ValueError, match="fact 'campaign_ctr' column 'ctr' row 'harbour'"):
+        reg.record_ranking(
+            "campaign_ctr",
+            {"north": 0.04, "harbour": bad},
+            key="ctr",
+            tool="warehouse.query",
+        )
+
+
+def test_record_ranking_rejects_non_numeric_scores():
+    reg = FactRegistry()
+    with pytest.raises(ValueError, match="row 'north': value '0.04' is not a number"):
+        reg.record_ranking("campaign_ctr", {"north": "0.04"}, key="ctr", tool="warehouse.query")
+
+
+# The same rejection when the ranking is derived from a table, and the error names
+# the column and the row rather than escaping as float()'s own TypeError.
+@pytest.mark.parametrize("bad", [None, "0.04", math.nan, True])
+def test_to_ranking_rejects_bad_cells_by_name(bad):
+    reg = FactRegistry()
+    reg.record_table(
+        "campaign_rows",
+        [{"campaign": "north", "ctr": bad}, {"campaign": "harbour", "ctr": 0.05}],
+        key="campaign",
+        tool="warehouse.query",
+    )
+    with pytest.raises(ValueError, match="column 'ctr' row 'north'") as exc:
+        reg.table("campaign_rows").to_ranking("ctr")
+    assert not isinstance(exc.value, TypeError)
