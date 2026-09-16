@@ -6,28 +6,28 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/ong6/groundplane/blob/main/LICENSE)
 
 A hard line between the parts of an agent's output the model may generate and the parts that must
-come from code — and a loud failure when the model crosses it.
+come from code. When the model crosses it, the build fails loudly.
 
 **Status: v0, in development.** API unstable. Not yet on PyPI.
 
 ## The problem in 60 seconds
 
-An agent calls tools, gets ground truth, then writes prose. The prose usually happens to match. When
-it doesn't, the failure is silent and confident: the summary names the second-best campaign as the
+An agent calls tools, gets ground truth, then writes prose. The prose usually matches. When it
+does not, the failure is silent and confident. The summary names the second-best campaign as the
 winner, quotes a plausible number nobody computed, or invents an entity that was not in the result
-set. Nothing throws. Nothing logs. The customer reads it.
+set. Nothing throws, nothing logs, and the customer reads it.
 
 `groundplane` makes the ground truth *declared*. Tool results are registered as typed facts
 with provenance; a boundary names which facts a block of output may reference; a deterministic
 checker validates the model's structured output against those facts. An unsupported claim raises.
 
-Scope is deliberately narrow: **bounded, declared facts only**. Not a general hallucination detector,
-and not model-based grading — an LLM judge would reintroduce the failure mode being removed.
+Scope is narrow on purpose: **bounded, declared facts only**. It is not a general hallucination
+detector and not model-based grading. An LLM judge would reintroduce the failure mode being removed.
 
 ## What it checks
 
-Six families. Each one asks how the recorded facts relate to *each other*, which is what a
-per-field validator cannot see. Every value in a swapped row is a real value, and a wrong
+Six families. Each asks how the recorded facts relate to *each other*, which a per-field validator
+cannot see. Every value in a swapped row is a real value, and a wrong
 argmax is spelled the same as the right one.
 
 | Check | Failure it catches |
@@ -55,14 +55,14 @@ flowchart LR
 
 `superlative` is the narrowest of the six and the easiest to show.
 
-Before — the winner is whatever the model wrote:
+Before. The winner is whatever the model wrote:
 
 ```python
 rows = warehouse.query("select campaign, ctr from campaign_daily")
 summary = llm(f"Which campaign performed best?\n{rows}")  # says "north". It was "harbour".
 ```
 
-After — the argmax is computed in code, and the model can only phrase it:
+After. The argmax is computed in code, and the model can only phrase it:
 
 ```python
 from groundplane import FactRegistry, boundary, superlative
@@ -101,10 +101,10 @@ if not report.ok:
 
 `b.submit(out, mode="all")`, or `boundary(..., mode="all")`, does the same and raises
 `ClaimsUnsupported` whose `str()` is `report.to_text()` and whose `.report` is the `Report`.
-Calling `report()` counts as submitting for the exit check even when it fails: the block was
+Calling `report()` counts as submitting for the exit check even when it fails. The block was
 checked, and what to do with a failing report is the caller's call. A check that raises anything
 other than `UnsupportedClaim` (a `ValueError` or `KeyError` from a misconfigured check) still
-propagates from `report()` — that is a developer mistake, not a model mistake.
+propagates from `report()`. That is a developer mistake, not a model mistake.
 
 ## Install
 
@@ -115,8 +115,8 @@ pip install groundplane
 First PyPI release is pending; until then, `pip install -e ".[dev]"` from a checkout.
 
 Requires Python >= 3.10. The core has no runtime dependencies. `groundplane[langgraph]` and
-`groundplane[mcp]` pull in those frameworks; the adapters themselves import neither, so they are
-readable and testable without either installed.
+`groundplane[mcp]` pull in those frameworks. The adapters import neither, so they read and test
+without either installed.
 
 ## API
 
@@ -145,8 +145,8 @@ field='winner')`, which is what a `Report` lists) and has an imperative twin,
 entity, and row checks at the same time.
 
 Every numeric check takes `tolerance` (absolute) and `rel_tolerance` (relative). Both default to
-exact: `rel_tolerance=None` means `rel_tol=0.0`, not `math.isclose`'s usual `1e-9`. A checker built
-to catch a wrong number shouldn't forgive nine digits by default. Pass `rel_tolerance=1e-9` for the
+exact. `rel_tolerance=None` means `rel_tol=0.0`, not `math.isclose`'s usual `1e-9`. A checker built
+to catch a wrong number should not forgive nine digits by default. Pass `rel_tolerance=1e-9` for the
 stdlib behaviour.
 
 Row keys keep their own type. An `int` id recorded by `record_table` stays an `int` all the way
@@ -168,9 +168,9 @@ taking the reask edge on a wrong argmax.
 ## Claim extraction: structured-output-first
 
 v0 validates **declared fields**, not English. The model emits `{"winner": ..., "ctr": ...}` and the
-checker resolves each field against the registry. Parsing prose would need either a brittle parser or
-an LLM judge; constraining the model to fields makes the check total and deterministic. Prose
-extraction, if it lands, sits on top of this layer — never instead of it. `Boundary.submit()` rejects
+checker resolves each field against the registry. Parsing prose would need a brittle parser or an
+LLM judge. Constraining the model to fields makes the check total and deterministic. Prose
+extraction, if it lands, sits on top of this layer, never instead of it. `Boundary.submit()` rejects
 a plain string for that reason.
 
 ## Adversarial fixtures
@@ -193,39 +193,39 @@ Checked 2026-08-27. Star counts as of that date.
 | [GroundProbe](https://github.com/aureliocpr-ctrl/groundprobe) | Tags each claim grounded / inferred / speculative from n-gram, LCS and tf-idf overlap with the source, with an optional LLM tie-break near the thresholds. | Lexical overlap, and it reports a score rather than raising. A wrong argmax is spelled almost exactly like the right one. |
 
 All four ask a version of "does this string appear in, or resemble, a source?". None validates a
-**relational** property of the recorded facts — that the named winner is the argmax, that the cut at
+**relational** property of the recorded facts: that the named winner is the argmax, that the cut at
 k misses a tie, that a stated total reconciles, that the number printed against a row came off that
-row. The argmax case on its own is about forty lines of Instructor validator. The reason to build a
-library is the other four.
+row. The argmax case alone is about forty lines of Instructor validator. The other four are the
+reason to build a library.
 
 ## The longer argument
 
 The failure this library exists for is small and does not look like a failure. An agent queries a
 table of campaign CTRs, gets seven rows back, and writes "north performed best this week." North was
-second. Harbour won. Every word is fluent, the score quoted is a real score from the result set, and
-nothing in the pipeline logs so much as a warning. The customer reads it.
+second. Harbour won. Every word is fluent, the score quoted is real, and nothing in the pipeline
+logs a warning. The customer reads it.
 
 You cannot prompt this away. "Only state what is in the data" is an instruction to the exact
-component that failed. The model already had the data; taking the max of seven numbers is trivial,
-and it still didn't. With sampling in the loop, "usually right" is the ceiling — and in production,
+component that failed. The model already had the data. Taking the max of seven numbers is trivial,
+and it still did not. With sampling in the loop, "usually right" is the ceiling. In production,
 usually means the wrong winner ships about once a week, silently.
 
 You also cannot grade it with a second model. An LLM judge asked "does this summary match the data?"
-is the same class of component making the same class of mistake, now wearing a rubber stamp. If the
+is the same class of component making the same class of mistake, now with a rubber stamp. If the
 failure is *the model asserted a relationship between values it did not compute*, the fix cannot be
 another uncomputed assertion.
 
-So the fix is boring, and the boringness is the feature. The argmax is computed in code at the
-moment the ranking is recorded: `record_ranking` stores the ordering, the winning key, and the
-provenance of the tool call that produced it. The model's job shrinks to phrasing: it emits
+So the fix is boring, and boring is the feature. The argmax is computed in code the moment the
+ranking is recorded. `record_ranking` stores the ordering, the winning key, and the provenance of
+the tool call that produced it. The model's job shrinks to phrasing. It emits
 `{"winner": ..., "ctr": ...}`, and `superlative` resolves those fields against the computed answer.
-When they disagree, the boundary raises `UnsupportedClaim`, and the message carries the tool call,
-its arguments, the computed winner, and where the model's pick actually ranked — because whoever is
-debugging this at 2am needs to know immediately whether the data or the prose was wrong.
+When they disagree, the boundary raises `UnsupportedClaim`. The message carries the tool call, its
+arguments, the computed winner, and where the model's pick ranked, because whoever is debugging this
+at 2am needs to know at once whether the data or the prose was wrong.
 
 Three choices I would defend in a review:
 
-**Exact comparison by default.** Every numeric check takes tolerances, but they default to zero —
+**Exact comparison by default.** Every numeric check takes tolerances, but they default to zero.
 `rel_tolerance=None` means `rel_tol=0.0`, not `math.isclose`'s usual `1e-9`. A checker built to
 catch a wrong number should not forgive nine digits of drift unless you tell it to.
 
@@ -236,14 +236,14 @@ lies. If the fact changed, that is a new fact with its own name and its own tool
 raises. A check that silently never ran is worse than no check, because someone upstream is now
 trusting it.
 
-The honest scope statement: this validates declared, structured fields against declared, recorded
+The scope, stated plainly: this validates declared, structured fields against declared, recorded
 facts. It is not a hallucination detector. If the model names the right winner and then editorialises
-misleadingly around it, that passes — the checker reads fields, not prose. I kept the scope that
-narrow deliberately, because every system I looked at that tried to verify open prose ended up
-delegating the verdict to embeddings or a judge model, which reintroduces the probabilistic verdict
-this exists to remove. The six check families all validate *relations between recorded values* —
-argmax, ordering, reconciliation, membership, row integrity — which is precisely the ground a
-per-field validator cannot see and a similarity score cannot express.
+misleadingly around it, that passes. The checker reads fields, not prose. I kept the scope that
+narrow because every system I looked at that tried to verify open prose ended up delegating the
+verdict to embeddings or a judge model, which brings back the probabilistic verdict this exists to
+remove. The six check families all validate *relations between recorded values*: argmax, ordering,
+reconciliation, membership, row integrity. That is the ground a per-field validator cannot see and a
+similarity score cannot express.
 
 ## License
 
@@ -259,3 +259,4 @@ Forges make things, packs bundle them.
 - [proofpack](https://github.com/ong6/proofpack) — pilot evidence, review proposals and customer-safe handovers
 - [fieldpack](https://github.com/ong6/fieldpack) — deckforge, skillforge and proofpack as one local-first suite
 - [skillpack](https://github.com/ong6/skillpack) — the Claude Code and Codex skills used across all of these
+- [uipack](https://github.com/ong6/uipack) — React and SVG figure components behind the diagrams on junxiong.dev
