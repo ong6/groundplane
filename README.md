@@ -248,3 +248,14 @@ per-field validator cannot see and a similarity score cannot express.
 ## License
 
 MIT © 2026 Ong Jun Xiong
+
+## More from ong6
+
+Forges make things, packs bundle them.
+
+- [jobforge](https://github.com/ong6/jobforge) — grades the interview plan you say out loud, not the code you submit
+- [skillforge](https://github.com/ong6/skillforge) — skill discovery, versioning and baseline-aware evaluation
+- [deckforge](https://github.com/ong6/deckforge) — agent-first presentation studio with a measured preflight
+- [proofpack](https://github.com/ong6/proofpack) — pilot evidence, review proposals and customer-safe handovers
+- [fieldpack](https://github.com/ong6/fieldpack) — deckforge, skillforge and proofpack as one local-first suite
+- [skillpack](https://github.com/ong6/skillpack) — the Claude Code and Codex skills used across all of these
