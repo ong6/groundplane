@@ -29,7 +29,7 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/ong6/groundplane"
+Homepage = "https://junxiong.dev/groundplane"
 Repository = "https://github.com/ong6/groundplane"
 Issues = "https://github.com/ong6/groundplane/issues"
 

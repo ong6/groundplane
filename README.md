@@ -10,6 +10,12 @@ come from code. When the model crosses it, the build fails loudly.
 
 **Status: v0, in development.** API unstable. Not yet on PyPI.
 
+Groundplane is the runtime end of a small open-source agent-tooling chain.
+[Skillpack](https://github.com/ong6/skillpack) holds the instructions an agent loads, and
+[Skill Eval Pack](https://github.com/ong6/skill-eval-pack) checks whether a new instruction earns
+its place. Groundplane checks declared facts when that agent runs. The case study and animated
+boundary are at [junxiong.dev/groundplane](https://junxiong.dev/groundplane).
+
 ## The problem in 60 seconds
 
 An agent calls tools, gets ground truth, then writes prose. The prose usually matches. When it
@@ -259,4 +265,5 @@ Forges make things, packs bundle them.
 - [proofpack](https://github.com/ong6/proofpack) — pilot evidence, review proposals and customer-safe handovers
 - [fieldpack](https://github.com/ong6/fieldpack) — deckforge, skillforge and proofpack as one local-first suite
 - [skillpack](https://github.com/ong6/skillpack) — the Claude Code and Codex skills used across all of these
+- [skill-eval-pack](https://github.com/ong6/skill-eval-pack) — the blind A/B gate a new or revised skill must pass
 - [uipack](https://github.com/ong6/uipack) — React and SVG figure components behind the diagrams on junxiong.dev
