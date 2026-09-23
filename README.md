@@ -12,7 +12,7 @@ come from code. When the model crosses it, the build fails loudly.
 
 Groundplane is the runtime end of a small open-source agent-tooling chain.
 [Skillpack](https://github.com/ong6/skillpack) holds the instructions an agent loads, and
-[Skill Eval Pack](https://github.com/ong6/skill-eval-pack) checks whether a new instruction earns
+[Skillsmith](https://github.com/ong6/skillsmith) makes a new instruction and checks whether it earns
 its place. Groundplane checks declared facts when that agent runs. The case study and animated
 boundary are at [junxiong.dev/groundplane](https://junxiong.dev/groundplane).
 
@@ -260,10 +260,9 @@ MIT © 2026 Ong Jun Xiong
 Forges make things, packs bundle them.
 
 - [jobforge](https://github.com/ong6/jobforge) — grades the interview plan you say out loud, not the code you submit
-- [skillforge](https://github.com/ong6/skillforge) — skill discovery, versioning and baseline-aware evaluation
+- [skillsmith](https://github.com/ong6/skillsmith) — makes an agent skill from your repo, then proves it beats no skill
 - [deckforge](https://github.com/ong6/deckforge) — agent-first presentation studio with a measured preflight
 - [proofpack](https://github.com/ong6/proofpack) — pilot evidence, review proposals and customer-safe handovers
-- [fieldpack](https://github.com/ong6/fieldpack) — deckforge, skillforge and proofpack as one local-first suite
+- [fieldpack](https://github.com/ong6/fieldpack) — deckforge and proofpack as one local-first suite
 - [skillpack](https://github.com/ong6/skillpack) — the Claude Code and Codex skills used across all of these
-- [skill-eval-pack](https://github.com/ong6/skill-eval-pack) — the blind A/B gate a new or revised skill must pass
 - [uipack](https://github.com/ong6/uipack) — React and SVG figure components behind the diagrams on junxiong.dev
