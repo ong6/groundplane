@@ -1,3 +1,4 @@
+import asyncio
 import math
 
 import pytest
@@ -254,3 +255,37 @@ def test_to_ranking_rejects_bad_cells_by_name(bad):
     with pytest.raises(ValueError, match="column 'ctr' row 'north'") as exc:
         reg.table("campaign_rows").to_ranking("ctr")
     assert not isinstance(exc.value, TypeError)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_tool_provenance_captures_positional_arguments_before_the_tool_mutates_them(asynchronous):
+    reg = FactRegistry()
+
+    def query(filters, *, limit=10):
+        filters["window"] = "changed"
+        return {"count": 7}
+
+    async def async_query(filters, *, limit=10):
+        await asyncio.sleep(0)
+        return query(filters, limit=limit)
+
+    fn = reg.tool("query", fact="count")(async_query if asynchronous else query)
+    result = fn({"window": "7d"})
+    if asynchronous:
+        result = asyncio.run(result)
+    assert result == {"count": 7}
+    assert reg.value("count") == result
+    assert reg.get("count").provenance.args == {"filters": {"window": "7d"}, "limit": 10}
+
+
+def test_async_callable_tool_is_awaited_before_recording():
+    class Query:
+        async def __call__(self, window):
+            await asyncio.sleep(0)
+            return {"n": 1}
+
+    reg = FactRegistry()
+    query = reg.tool("query", fact="f")(Query())
+    assert asyncio.run(query("7d")) == {"n": 1}
+    assert reg.value("f") == {"n": 1}
+    assert reg.get("f").provenance.args == {"window": "7d"}

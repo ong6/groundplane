@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from fractions import Fraction
 from typing import Any
 
 from .errors import UnsupportedClaim
-from .registry import FactRegistry, OnMissing, Ranking, Table, require_number
+from .registry import FactRegistry, OnMissing, Ranking, Table, require_number, same_key
 
 __all__ = [
     "TOLERANCE_NOTE",
@@ -24,8 +25,8 @@ __all__ = [
 ]
 
 TOLERANCE_NOTE = """\
-``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
-straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
+``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, using
+the :func:`math.isclose` rule without converting integers to floats.
 
 **Footgun, and deliberate:** ``rel_tolerance=None`` (the default) means ``rel_tol=0.0``,
 *not* :func:`math.isclose`'s usual ``1e-9``. A checker whose job is to catch a wrong
@@ -132,6 +133,64 @@ def values_close(
     NaN reaching here can only be the model's claim, and a claim of "not a number"
     is not supported by any number.
     """
-    return math.isclose(
-        float(claimed), float(computed), abs_tol=tolerance, rel_tol=rel_tolerance or 0.0
-    )
+    relative = 0.0 if rel_tolerance is None else rel_tolerance
+    for name, value in (("tolerance", tolerance), ("rel_tolerance", relative)):
+        if not is_number(value) or value < 0 or not math.isfinite(value):
+            raise ValueError(f"{name} must be a finite non-negative number, got {value!r}")
+    if not is_number(claimed) or not is_number(computed):
+        return False
+    if any(isinstance(value, float) and not math.isfinite(value) for value in (claimed, computed)):
+        return False
+    if tolerance == 0 and relative == 0:
+        return claimed == computed
+    # Converting an integer to float can collapse distinct recorded values. Keep
+    # the integer's exact value even when the caller allows a tolerance.
+    if isinstance(claimed, int) or isinstance(computed, int):
+        a, b = Fraction(claimed), Fraction(computed)
+        return abs(a - b) <= max(Fraction(tolerance), Fraction(relative) * max(abs(a), abs(b)))
+    return math.isclose(claimed, computed, abs_tol=tolerance, rel_tol=relative)
+
+
+def values_equal(claimed: Any, recorded: Any) -> bool:
+    """Structural equality without Python's recursive ``True == 1`` alias."""
+    if isinstance(claimed, bool) or isinstance(recorded, bool):
+        return type(claimed) is type(recorded) and claimed == recorded
+    if is_number(claimed) and is_number(recorded):
+        return values_close(claimed, recorded)
+    if isinstance(claimed, Mapping) and isinstance(recorded, Mapping):
+        return len(claimed) == len(recorded) and all(
+            any(same_key(key, other) and values_equal(value, recorded[other]) for other in recorded)
+            for key, value in claimed.items()
+        )
+    if isinstance(claimed, (list, tuple)) and isinstance(recorded, (list, tuple)):
+        return (
+            type(claimed) is type(recorded)
+            and len(claimed) == len(recorded)
+            and all(values_equal(a, b) for a, b in zip(claimed, recorded, strict=True))
+        )
+    if isinstance(claimed, (set, frozenset)) and isinstance(recorded, (set, frozenset)):
+        return len(claimed) == len(recorded) and all(
+            any(same_key(value, other) for other in recorded) for value in claimed
+        )
+    return bool(claimed == recorded)
+
+
+def offset_text(claimed: float, computed: float) -> str:
+    """Describe a mismatch without overflowing while rendering a huge model integer."""
+    try:
+        return f"{claimed - computed:+g}"
+    except OverflowError:
+        return "outside the floating-point range"
+
+
+def numeric_result(value: Fraction) -> float:
+    """Keep integral arithmetic exact, with a single final rounding for fractions."""
+    if value.denominator == 1:
+        return value.numerator
+    try:
+        number = float(value)
+    except OverflowError:
+        raise ValueError("computed result is outside the finite floating-point range") from None
+    if (number == 0 and value != 0) or (abs(number) >= 2**53 and Fraction(number) != value):
+        raise ValueError("computed result loses precision outside the floating-point range")
+    return number

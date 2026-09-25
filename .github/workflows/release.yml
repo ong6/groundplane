@@ -29,5 +29,25 @@ jobs:
       - name: Smoke-test the wheel
         run: |
           pip install dist/*.whl
-          python -c "import groundplane; print(groundplane.__version__)"
+          python -I - <<'PY'
+          import importlib.metadata
+          import importlib.resources
+
+          import groundplane
+          from groundplane import FactRegistry, UnsupportedClaim, boundary, superlative
+
+          assert groundplane.__version__ == importlib.metadata.version("groundplane")
+          assert importlib.resources.files("groundplane").joinpath("py.typed").is_file()
+          registry = FactRegistry()
+          registry.record_ranking("r", {"a": 2, "b": 1}, key="n", tool="wheel-smoke")
+          with boundary(registry, facts=["r"], checks=[superlative(fact="r")]) as guard:
+              guard.submit({"winner": "a"})
+              try:
+                  guard.submit({"winner": "b"})
+              except UnsupportedClaim:
+                  pass
+              else:
+                  raise AssertionError("installed wheel accepted an unsupported winner")
+          print(groundplane.__version__, groundplane.__file__)
+          PY
       - uses: pypa/gh-action-pypi-publish@release/v1

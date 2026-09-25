@@ -13,7 +13,9 @@ that reads the rendering is back to parsing prose.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 from ..registry import Fact, FactRegistry
@@ -21,11 +23,25 @@ from ..registry import Fact, FactRegistry
 __all__ = ["payload_of", "record_result", "call_and_record"]
 
 
+def _member(value: Any, name: str, default: Any = None) -> Any:
+    return value.get(name, default) if isinstance(value, Mapping) else getattr(value, name, default)
+
+
 def _text_blocks(result: Any) -> list[str]:
-    blocks = getattr(result, "content", None)
+    blocks = _member(result, "content")
     if not isinstance(blocks, Sequence):
         return []
-    return [b.text for b in blocks if getattr(b, "type", None) == "text" and hasattr(b, "text")]
+    texts = [_member(b, "text") for b in blocks if _member(b, "type") == "text"]
+    if any(not isinstance(text, str) for text in texts):
+        raise ValueError("MCP text content must carry a string")
+    return texts
+
+
+def _finite_json_number(token: str) -> float:
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError(f"MCP JSON text contains a non-finite number: {token}")
+    return value
 
 
 def payload_of(result: Any, *, parse_json: bool = True) -> Any:
@@ -38,11 +54,11 @@ def payload_of(result: Any, *, parse_json: bool = True) -> Any:
     Raises ``ValueError`` when the result carries nothing, and when the result is
     flagged ``isError``: an error result is not a fact.
     """
-    if getattr(result, "isError", False) or getattr(result, "is_error", False):
+    if _member(result, "isError", False) or _member(result, "is_error", False):
         raise ValueError(f"MCP tool result is an error result: {_text_blocks(result) or result!r}")
 
     for attr in ("structured_content", "structuredContent"):
-        structured = getattr(result, attr, None)
+        structured = _member(result, attr)
         if structured is not None:
             return structured
 
@@ -52,8 +68,10 @@ def payload_of(result: Any, *, parse_json: bool = True) -> Any:
     joined = "\n".join(texts)
     if parse_json:
         try:
-            return json.loads(joined)
-        except (TypeError, ValueError):
+            return json.loads(
+                joined, parse_float=_finite_json_number, parse_constant=_finite_json_number
+            )
+        except json.JSONDecodeError:
             pass
     return joined
 
@@ -86,6 +104,7 @@ async def call_and_record(
     coroutine. The recorded provenance is the tool name and the arguments actually
     sent, so the error message a checker later prints names the call to re-run.
     """
-    result = await session.call_tool(tool, dict(arguments or {}))
-    record_result(registry, fact, result, tool=tool, args=arguments, parse_json=parse_json)
+    sent = deepcopy(dict(arguments or {}))
+    result = await session.call_tool(tool, deepcopy(sent))
+    record_result(registry, fact, result, tool=tool, args=sent, parse_json=parse_json)
     return result

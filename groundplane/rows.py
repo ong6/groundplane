@@ -13,7 +13,7 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from ._internal import is_number, require_field, require_number, values_close
+from ._internal import is_number, require_field, require_number, values_close, values_equal
 from .boundary import NamedCheck
 from .errors import UnsupportedClaim
 from .registry import FactRegistry, Table
@@ -32,7 +32,7 @@ def _values_match(
         return values_close(claimed, recorded, tolerance=tolerance, rel_tolerance=rel_tolerance)
     if is_number(claimed) != is_number(recorded):
         return False
-    return bool(claimed == recorded)
+    return values_equal(claimed, recorded)
 
 
 def _other_row_with(table: Table, column: str, value: Any, *, exclude: Any) -> Any | None:
@@ -70,8 +70,8 @@ def check_row_integrity(
     the table cannot support or refute the claim: that is a data problem, raised as
     ``ValueError`` naming the fact, column and row, not as a model failure.
 
-    ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
-    straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
+    ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, using
+    the :func:`math.isclose` rule without converting integers to floats.
 
     **Footgun, and deliberate:** ``rel_tolerance=None`` (the default) means ``rel_tol=0.0``,
     *not* :func:`math.isclose`'s usual ``1e-9``. A checker whose job is to catch a wrong
@@ -103,7 +103,7 @@ def check_row_integrity(
         claimed = require_field(output, out_field)
         recorded = row[column]
         if is_number(claimed) and (
-            recorded is None or (is_number(recorded) and not math.isfinite(recorded))
+            recorded is None or (isinstance(recorded, float) and not math.isfinite(recorded))
         ):
             require_number(recorded, column=column, key=claimed_key, fact=fact)
         if _values_match(claimed, recorded, tolerance=tolerance, rel_tolerance=rel_tolerance):

@@ -119,7 +119,9 @@ class Boundary:
         require_output: bool = True,
         mode: Mode = "first",
     ) -> None:
-        self.registry = registry
+        if mode not in ("first", "all"):
+            raise ValueError(f"mode must be 'first' or 'all', got {mode!r}")
+        self.registry = registry._restricted(permitted)
         self.permitted = tuple(permitted)
         self.checks: tuple[NamedCheck, ...] = tuple(as_named(c) for c in checks)
         self.require_output = require_output
@@ -147,8 +149,11 @@ class Boundary:
         ``mode="all"`` runs every check and raises :class:`ClaimsUnsupported` carrying
         the full :class:`Report`. Defaults to the boundary's own ``mode``.
         """
+        resolved_mode = self.mode if mode is None else mode
+        if resolved_mode not in ("first", "all"):
+            raise ValueError(f"mode must be 'first' or 'all', got {resolved_mode!r}")
         self._accept(output)
-        if (mode or self.mode) == "all":
+        if resolved_mode == "all":
             report = self.report(output)
             if not report.ok:
                 raise ClaimsUnsupported(report)
@@ -205,6 +210,8 @@ class BoundaryDeclaration:
         require_output: bool = True,
         mode: Mode = "first",
     ) -> None:
+        if mode not in ("first", "all"):
+            raise ValueError(f"mode must be 'first' or 'all', got {mode!r}")
         self.registry = registry
         self.facts = tuple(facts)
         self.checks: tuple[NamedCheck, ...] = tuple(as_named(c) for c in checks)

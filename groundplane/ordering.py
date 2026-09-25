@@ -14,7 +14,7 @@ from typing import Any, NoReturn
 from ._internal import require_field, resolve_ranking
 from .boundary import NamedCheck
 from .errors import UnsupportedClaim
-from .registry import FactRegistry, OnMissing, Ranking
+from .registry import FactRegistry, OnMissing, Ranking, same_key
 
 __all__ = ["ranking_prefix", "check_ranking_prefix"]
 
@@ -54,6 +54,8 @@ def check_ranking_prefix(
     and whether a ``Table`` row without ``column`` refuses the ranking or is
     skipped with a warning.
     """
+    if k is not None and (type(k) is not int or k < 1):
+        raise ValueError(f"k must be an integer at least 1, got {k!r}")
     ranking = resolve_ranking(
         registry, fact, column, higher_is_better=higher_is_better, on_missing=on_missing
     )
@@ -96,7 +98,7 @@ def check_ranking_prefix(
         if name in seen:
             fail(f"{name!r} appears twice; a ranking prefix cannot repeat a name", expected)
         seen.add(name)
-        if name not in ranking.names:
+        if not any(same_key(name, recorded) for recorded in ranking.names):
             fail(f"{name!r} was never ranked; ranked entities: {list(ranking.names)}", expected)
 
     covering = _blocks_for_positions(ranking, n)
@@ -113,7 +115,7 @@ def check_ranking_prefix(
 
     if ordered:
         for i, name in enumerate(items):
-            if name not in covering[i]:
+            if not any(same_key(name, recorded) for recorded in covering[i]):
                 fail(
                     f"{name!r} is #{ranking.rank_of(name)} on {ranking.key!r} "
                     f"({ranking.score_of(name)!r}); the computed top {n} is {expected}",
@@ -132,7 +134,7 @@ def check_ranking_prefix(
                 f"({ranking.score_of(name)!r}); the computed top {n} is {expected}",
                 expected,
             )
-    missing = sorted(required - seen)
+    missing = sorted(required - seen, key=repr)
     if missing:
         fail(f"the computed top {n} on {ranking.key!r} also contains {missing}", expected)
 
@@ -149,8 +151,8 @@ def ranking_prefix(
     on_missing: OnMissing = "raise",
 ) -> NamedCheck:
     """Build a boundary check from :func:`check_ranking_prefix`."""
-    if k is not None and k < 1:
-        raise ValueError(f"k must be at least 1, got {k!r}")
+    if k is not None and (type(k) is not int or k < 1):
+        raise ValueError(f"k must be an integer at least 1, got {k!r}")
 
     def check(registry: FactRegistry, output: Mapping[str, Any]) -> None:
         check_ranking_prefix(

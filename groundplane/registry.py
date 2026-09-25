@@ -9,10 +9,13 @@ from __future__ import annotations
 import math
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
+from functools import wraps
+from inspect import iscoroutinefunction, signature
 from typing import Any, Literal
 
-from .errors import UnregisteredFact
+from .errors import FactBoundaryError, UnregisteredFact
 
 __all__ = [
     "Fact",
@@ -27,6 +30,17 @@ __all__ = [
 OnMissing = Literal["raise", "skip"]
 
 
+def same_key(left: Any, right: Any) -> bool:
+    """Keys retain their type, including inside composite tuple keys."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, tuple):
+        return len(left) == len(right) and all(
+            same_key(a, b) for a, b in zip(left, right, strict=True)
+        )
+    return bool(left == right)
+
+
 class SparseColumnWarning(UserWarning):
     """A ranking was derived from only the rows that carry the ranked column.
 
@@ -37,7 +51,7 @@ class SparseColumnWarning(UserWarning):
 
 
 def require_number(value: Any, *, column: str, key: Any, fact: str | None = None) -> float:
-    """``value`` as a float, or a ``ValueError`` that says which cell was bad.
+    """A finite numeric ``value`` without coercion, or a ``ValueError`` naming the cell.
 
     Every place that turns a recorded cell into arithmetic goes through here, so
     a ``None`` from a left join, a ``"n/a"`` string, or a ``NaN`` from a broken
@@ -54,10 +68,9 @@ def require_number(value: Any, *, column: str, key: Any, fact: str | None = None
         where = f"fact {fact!r} {where}"
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{where}: value {value!r} is not a number")
-    number = float(value)
-    if not math.isfinite(number):
+    if isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{where}: value {value!r} is not finite")
-    return number
+    return value
 
 
 def _join(parts: Iterable[str]) -> str:
@@ -138,13 +151,13 @@ class Ranking:
 
     def score_of(self, name: Any) -> float | None:
         for item, score in self.items:
-            if item == name:
+            if same_key(item, name):
                 return score
         return None
 
     def rank_of(self, name: Any) -> int | None:
         for i, (item, _) in enumerate(self.items):
-            if item == name:
+            if same_key(item, name):
                 return i + 1
         return None
 
@@ -172,7 +185,7 @@ class Table:
     def row(self, key: Any) -> Mapping[str, Any] | None:
         """The row identified by ``key``, or ``None`` if the table has no such row."""
         for row in self.rows:
-            if row[self.key] == key:
+            if same_key(row[self.key], key):
                 return row
         return None
 
@@ -284,6 +297,14 @@ class FactRegistry:
 
     def __init__(self) -> None:
         self._facts: dict[str, Fact] = {}
+        self._read_only = False
+
+    def _restricted(self, names: Sequence[str]) -> FactRegistry:
+        """A read-only registry containing only a boundary's declared facts."""
+        scoped = FactRegistry()
+        scoped._facts = {name: self.get(name) for name in names}
+        scoped._read_only = True
+        return scoped
 
     # -- writing -------------------------------------------------------------
 
@@ -295,15 +316,24 @@ class FactRegistry:
         tool: str,
         args: Mapping[str, Any] | None = None,
     ) -> Fact:
-        """Register ``value`` under ``name`` as produced by ``tool``."""
+        """Snapshot ``value`` under ``name`` as produced by ``tool``.
+
+        Values and arguments must support ``copy.deepcopy``. Copies on both write
+        and read keep mutable tool responses and prompt builders from rewriting
+        recorded evidence. Custom objects must implement copying faithfully.
+        """
+        if self._read_only:
+            raise FactBoundaryError("a boundary's fact registry is read-only")
         if name in self._facts:
             raise ValueError(
                 f"fact {name!r} is already registered "
                 f"(from {self._facts[name].provenance}); facts are write-once"
             )
-        fact = Fact(name=name, value=value, provenance=Provenance(tool=tool, args=dict(args or {})))
+        fact = deepcopy(
+            Fact(name=name, value=value, provenance=Provenance(tool=tool, args=dict(args or {})))
+        )
         self._facts[name] = fact
-        return fact
+        return deepcopy(fact)
 
     def record_ranking(
         self,
@@ -417,13 +447,32 @@ class FactRegistry:
         """Decorate a tool function so its return value is registered on call."""
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+            call_signature = signature(fn)
+
+            def call_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+                bound = call_signature.bind(*args, **kwargs)
+                bound.apply_defaults()
+                return deepcopy(dict(bound.arguments))
+
+            call_method = getattr(fn, "__call__", None)  # noqa: B004 - inspect async callable objects
+            if iscoroutinefunction(fn) or iscoroutinefunction(call_method):
+
+                @wraps(fn)
+                async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    captured = call_args(args, kwargs)
+                    value = await fn(*args, **kwargs)
+                    self.record(fact, value, tool=name, args=captured)
+                    return value
+
+                return async_wrapper
+
+            @wraps(fn)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
+                captured = call_args(args, kwargs)
                 value = fn(*args, **kwargs)
-                self.record(fact, value, tool=name, args=dict(kwargs))
+                self.record(fact, value, tool=name, args=captured)
                 return value
 
-            wrapper.__name__ = getattr(fn, "__name__", name)
-            wrapper.__doc__ = fn.__doc__
             return wrapper
 
         return decorator
@@ -432,7 +481,7 @@ class FactRegistry:
 
     def get(self, name: str) -> Fact:
         try:
-            return self._facts[name]
+            return deepcopy(self._facts[name])
         except KeyError:
             raise UnregisteredFact(name, list(self._facts)) from None
 
@@ -474,4 +523,4 @@ class FactRegistry:
         return len(self._facts)
 
     def __iter__(self) -> Iterator[Fact]:
-        return iter(self._facts.values())
+        return (deepcopy(fact) for fact in self._facts.values())

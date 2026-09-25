@@ -12,12 +12,19 @@ silent lie no matter how well it is arithmetically formed.
 
 from __future__ import annotations
 
-import math
-import statistics
 from collections.abc import Mapping
+from contextlib import suppress
+from fractions import Fraction
 from typing import Any, Literal
 
-from ._internal import is_number, require_field, require_number, values_close
+from ._internal import (
+    is_number,
+    numeric_result,
+    offset_text,
+    require_field,
+    require_number,
+    values_close,
+)
 from .boundary import NamedCheck
 from .errors import UnsupportedClaim
 from .registry import FactRegistry
@@ -27,6 +34,10 @@ __all__ = ["aggregate_reconciles", "check_aggregate_reconciles"]
 Op = Literal["sum", "count", "mean", "min", "max", "median"]
 
 _OPS: tuple[str, ...] = ("sum", "count", "mean", "min", "max", "median")
+
+
+def _total(values: list[float]) -> Fraction:
+    return sum((Fraction(value) for value in values), Fraction())
 
 
 def _validate_config(op: Op, column: str | None, weight_column: str | None) -> None:
@@ -49,7 +60,7 @@ def _select(
     for key in where:
         if key not in columns:
             raise KeyError(f"where column {key!r} not in table; columns: {list(columns)}")
-    return tuple(row for row in rows if all(row.get(k) == v for k, v in where.items()))
+    return tuple(row for row in rows if all(k in row and row[k] == v for k, v in where.items()))
 
 
 def check_aggregate_reconciles(
@@ -73,8 +84,8 @@ def check_aggregate_reconciles(
     number where one is needed (``None``, a string, NaN) is a data problem rather
     than a model claim and raises ``ValueError`` naming the fact, column and row.
 
-    ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
-    straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
+    ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, using
+    the :func:`math.isclose` rule without converting integers to floats.
 
     **Footgun, and deliberate:** ``rel_tolerance=None`` (the default) means ``rel_tol=0.0``,
     *not* :func:`math.isclose`'s usual ``1e-9``. A checker whose job is to catch a wrong
@@ -170,18 +181,28 @@ def check_aggregate_reconciles(
 
     naive_mean: float | None = None
     if op == "sum":
-        computed = math.fsum(values)
+        computed = numeric_result(_total(values))
     elif op == "min":
         computed = min(values)
     elif op == "max":
         computed = max(values)
     elif op == "median":
-        computed = statistics.median(values)
+        ordered = sorted(values)
+        middle = len(ordered) // 2
+        computed = (
+            ordered[middle]
+            if len(ordered) % 2
+            else numeric_result((Fraction(ordered[middle - 1]) + Fraction(ordered[middle])) / 2)
+        )
     else:  # mean
-        naive_mean = math.fsum(values) / len(values)
+        mean_fraction = _total(values) / len(values)
         if weight_column is None:
-            computed = naive_mean
+            computed = numeric_result(mean_fraction)
         else:
+            # This figure is only a diagnostic. Failure to represent it must
+            # not veto a representable weighted result.
+            with suppress(ValueError):
+                naive_mean = numeric_result(mean_fraction)
             if weight_column not in table.columns:
                 raise KeyError(
                     f"column {weight_column!r} not in table; columns: {list(table.columns)}"
@@ -202,7 +223,7 @@ def check_aggregate_reconciles(
                     provenance=provenance,
                     reason=f"some selected rows have no weight column {weight_column!r}",
                 )
-            total_weight = math.fsum(weights)
+            total_weight = _total(weights)
             if total_weight == 0:
                 raise UnsupportedClaim(
                     field,
@@ -214,7 +235,11 @@ def check_aggregate_reconciles(
                         f"total weight on {weight_column!r} is zero; a weighted mean is undefined"
                     ),
                 )
-            computed = math.fsum(v * w for v, w in zip(values, weights, strict=True)) / total_weight
+            weighted_total = sum(
+                (Fraction(v) * Fraction(w) for v, w in zip(values, weights, strict=True)),
+                Fraction(),
+            )
+            computed = numeric_result(weighted_total / total_weight)
 
     if not is_number(claimed):
         raise UnsupportedClaim(
@@ -229,20 +254,19 @@ def check_aggregate_reconciles(
     if values_close(claimed, computed, tolerance=tolerance, rel_tolerance=rel_tolerance):
         return
 
-    delta = float(claimed) - computed
     reason = (
-        f"{op} of {column!r} over {len(present)} rows is {computed:g}; "
-        f"model said {claimed:g} (off by {delta:+g})"
+        f"{op} of {column!r} over {len(present)} rows is {computed!r}; "
+        f"model said {claimed!r} (off by {offset_text(claimed, computed)})"
     )
     if weight_column is not None and naive_mean is not None:
-        weighted_note = f" weighted by {weight_column!r} = {computed:g}"
+        weighted_note = f" weighted by {weight_column!r} = {computed!r}"
         if values_close(claimed, naive_mean, tolerance=tolerance, rel_tolerance=rel_tolerance):
             reason += (
-                f"; the claim matches the unweighted mean {naive_mean:g}, so the model averaged "
+                f"; the claim matches the unweighted mean {naive_mean!r}, so the model averaged "
                 f"the per-row figures instead of{weighted_note}"
             )
         else:
-            reason += f"; unweighted mean is {naive_mean:g},{weighted_note}"
+            reason += f"; unweighted mean is {naive_mean!r},{weighted_note}"
     raise UnsupportedClaim(
         field,
         claimed,

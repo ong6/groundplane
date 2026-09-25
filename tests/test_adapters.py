@@ -5,6 +5,8 @@ callable taking state and returning a partial update; an MCP result is an object
 carrying structured content or text blocks.
 """
 
+import asyncio
+
 import pytest
 
 from groundplane import FactRegistry, UnsupportedClaim, superlative
@@ -174,3 +176,86 @@ def test_call_and_record_records_what_was_sent():
     assert session.calls == [("warehouse.query", {"window": "7d"})]
     assert reg.value("ctr") == {"ctr": 0.0455}
     assert str(reg.get("ctr").provenance) == "warehouse.query(window='7d')"
+
+
+def test_mcp_dictionary_payload_and_error_flags_follow_the_object_contract():
+    result = {"structuredContent": {"n": 1}, "content": [{"type": "text", "text": '{"n": 2}'}]}
+    assert payload_of(result) == {"n": 1}
+    assert payload_of({"content": [{"type": "text", "text": '{"n": 2}'}]}) == {"n": 2}
+    result["isError"] = True
+    reg = FactRegistry()
+    with pytest.raises(ValueError, match="error result"):
+        record_result(reg, "bad", result, tool="query")
+    assert len(reg) == 0
+
+
+@pytest.mark.parametrize(
+    "text", ['{"n": NaN}', '{"n": Infinity}', '{"n": -Infinity}', '{"n": 1e400}']
+)
+def test_mcp_nonfinite_json_cannot_become_recorded_evidence(text):
+    reg = FactRegistry()
+    with pytest.raises(ValueError, match="non-finite"):
+        record_result(reg, "bad", _Result(texts=[text]), tool="query")
+    assert len(reg) == 0
+
+
+def test_mcp_malformed_text_block_is_a_data_error():
+    with pytest.raises(ValueError, match="string"):
+        payload_of({"content": [{"type": "text", "text": None}]})
+
+
+def test_mcp_provenance_keeps_the_arguments_sent_before_the_await():
+    arguments = {"filter": {"window": "7d"}}
+
+    class Session:
+        async def call_tool(self, name, sent):
+            assert sent == {"filter": {"window": "7d"}}
+            arguments["filter"]["window"] = "1d"
+            sent["filter"]["window"] = "30d"
+            await asyncio.sleep(0)
+            return _Result(structured={"n": 1})
+
+    reg = FactRegistry()
+    asyncio.run(call_and_record(Session(), reg, fact="n", tool="query", arguments=arguments))
+    assert reg.get("n").provenance.args == {"filter": {"window": "7d"}}
+
+
+@pytest.mark.parametrize("winner", ["harbour", "north"])
+@pytest.mark.parametrize("callable_object", [False, True])
+def test_async_nodes_are_awaited_before_their_claim_crosses_the_boundary(
+    registry, winner, callable_object
+):
+    async def summarize(state):
+        await asyncio.sleep(0)
+        return {"winner": winner}
+
+    class Summarize:
+        async def __call__(self, state):
+            return await summarize(state)
+
+    fn = Summarize() if callable_object else summarize
+    node = guarded_node(fn, registry=registry, facts=["campaign_ctr"], checks=CHECKS)
+    if winner == "harbour":
+        assert asyncio.run(node({})) == {"winner": "harbour"}
+    else:
+        with pytest.raises(UnsupportedClaim):
+            asyncio.run(node({}))
+
+
+def test_async_nodes_keep_reask_and_configuration_failure_separate(registry):
+    async def summarize(state):
+        return {"summary": {"winner": "north"}}
+
+    options = {
+        "registry": registry,
+        "facts": ["campaign_ctr"],
+        "output_key": "summary",
+        "on_violation": lambda exc, state: {"reask": str(exc)},
+    }
+    node = guarded_node(summarize, checks=CHECKS, **options)
+    assert "reask" in asyncio.run(node({}))
+    broken = guarded_node(
+        summarize, checks=[superlative(fact="campaign_ctr", column="ctr")], **options
+    )
+    with pytest.raises(ValueError, match="already a Ranking"):
+        asyncio.run(broken({}))

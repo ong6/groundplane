@@ -16,10 +16,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ._internal import is_number, require_field, resolve_ranking, values_close
+from ._internal import is_number, require_field, resolve_ranking, values_close, values_equal
 from .boundary import NamedCheck
 from .errors import UnsupportedClaim
-from .registry import FactRegistry, OnMissing
+from .registry import FactRegistry, OnMissing, same_key
 
 __all__ = ["superlative", "field_matches_fact", "check_superlative"]
 
@@ -53,8 +53,8 @@ def check_superlative(
     row without ``column`` means: ``"raise"`` (default) refuses to rank a subset,
     ``"skip"`` ranks the rows that carry it and warns.
 
-    ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
-    straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
+    ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, using
+    the :func:`math.isclose` rule without converting integers to floats.
 
     **Footgun, and deliberate:** ``rel_tolerance=None`` (the default) means ``rel_tol=0.0``,
     *not* :func:`math.isclose`'s usual ``1e-9``. A checker whose job is to catch a wrong
@@ -68,7 +68,7 @@ def check_superlative(
     provenance = str(registry.get(fact).provenance)
     claimed = require_field(output, winner_field)
 
-    if claimed not in ranking.names:
+    if not any(same_key(claimed, name) for name in ranking.names):
         raise UnsupportedClaim(
             winner_field,
             claimed,
@@ -92,7 +92,7 @@ def check_superlative(
             ),
         )
 
-    if claimed not in ties:
+    if not any(same_key(claimed, name) for name in ties):
         raise UnsupportedClaim(
             winner_field,
             claimed,
@@ -137,7 +137,7 @@ def check_superlative(
 
     if rank_field is not None:
         claimed_rank = require_field(output, rank_field)
-        if claimed_rank != 1:
+        if type(claimed_rank) is not int or claimed_rank != 1:
             raise UnsupportedClaim(
                 rank_field,
                 claimed_rank,
@@ -190,7 +190,7 @@ def field_matches_fact(*, field: str, fact: str, path: Sequence[str] = ()) -> Na
         for step in path:
             value = value[step]
         claimed = require_field(output, field)
-        if claimed != value:
+        if not values_equal(claimed, value):
             raise UnsupportedClaim(
                 field,
                 claimed,

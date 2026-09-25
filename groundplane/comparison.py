@@ -13,13 +13,22 @@ does match.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
+from fractions import Fraction
 from typing import Any, Literal
 
-from ._internal import is_number, require_field, values_close
+from ._internal import (
+    is_number,
+    numeric_result,
+    offset_text,
+    require_field,
+    require_number,
+    values_close,
+)
 from .boundary import NamedCheck
 from .errors import UnsupportedClaim
-from .registry import FactRegistry, Ranking, Table
+from .registry import FactRegistry, Ranking, Table, same_key
 
 __all__ = ["comparison", "check_comparison"]
 
@@ -45,15 +54,16 @@ def _delta(kind: str, a: float, b: float) -> float | None:
     not infinity, not zero — and the caller must refuse the claim rather than pick
     a value to compare against.
     """
+    left, right = Fraction(a), Fraction(b)
     if kind == "abs":
-        return a - b
+        return numeric_result(left - right)
     if kind == "pp":
-        return (a - b) * 100
+        return numeric_result((left - right) * 100)
     if b == 0:
         return None
     if kind == "pct":
-        return (a - b) / b * 100
-    return a / b
+        return numeric_result((left - right) / right * 100)
+    return numeric_result(left / right)
 
 
 def _lookup(registry: FactRegistry, fact: str, column: str | None) -> tuple[dict[Any, float], str]:
@@ -112,8 +122,8 @@ def check_comparison(
 
     ``fact`` may be a ``Ranking`` or, with ``column=``, a recorded ``Table``.
 
-    ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, passed
-    straight to :func:`math.isclose` as ``abs_tol`` and ``rel_tol``.
+    ``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, using
+    the :func:`math.isclose` rule without converting integers to floats.
 
     **Footgun, and deliberate:** ``rel_tolerance=None`` (the default) means ``rel_tol=0.0``,
     *not* :func:`math.isclose`'s usual ``1e-9``. A checker whose job is to catch a wrong
@@ -129,7 +139,7 @@ def check_comparison(
     claimed = require_field(output, delta_field)
 
     for field, name in ((a_field, a_name), (b_field, b_name)):
-        if name not in values:
+        if not any(same_key(name, recorded) for recorded in values):
             raise UnsupportedClaim(
                 field,
                 name,
@@ -138,15 +148,7 @@ def check_comparison(
                 provenance=provenance,
                 reason=f"{name!r} is not in the fact; known entities: {list(values)}",
             )
-        if not is_number(values[name]):
-            raise UnsupportedClaim(
-                delta_field,
-                claimed,
-                "no verifiable comparison",
-                fact=fact,
-                provenance=provenance,
-                reason=f"{metric!r} for {name!r} is {values[name]!r}, not a number",
-            )
+        require_number(values[name], column=metric, key=name, fact=fact)
 
     if a_name == b_name:
         raise UnsupportedClaim(
@@ -161,10 +163,13 @@ def check_comparison(
             ),
         )
 
-    a = float(values[a_name])
-    b = float(values[b_name])
+    a = values[a_name]
+    b = values[b_name]
     lhs, rhs = (a, b) if direction == "a_minus_b" else (b, a)
-    computed = _delta(kind, lhs, rhs)
+    try:
+        computed = _delta(kind, lhs, rhs)
+    except OverflowError:
+        raise ValueError(f"fact {fact!r}: computed {kind} comparison is not finite") from None
     if computed is None:
         base = b_name if direction == "a_minus_b" else a_name
         raise UnsupportedClaim(
@@ -178,6 +183,9 @@ def check_comparison(
                 "undefined whatever the claim"
             ),
         )
+
+    if isinstance(computed, float) and not math.isfinite(computed):
+        raise ValueError(f"fact {fact!r}: computed {kind} comparison is not finite")
 
     if not is_number(claimed):
         raise UnsupportedClaim(
@@ -193,9 +201,9 @@ def check_comparison(
         return
 
     reason = (
-        f"{kind} delta of {metric!r}, {a_name!r} ({a:g}) vs {b_name!r} ({b:g}) "
-        f"{direction}, is {computed:g}; model said {claimed:g} "
-        f"(off by {float(claimed) - computed:+g})"
+        f"{kind} delta of {metric!r}, {a_name!r} ({a!r}) vs {b_name!r} ({b!r}) "
+        f"{direction}, is {computed!r}; model said {claimed!r} "
+        f"(off by {offset_text(claimed, computed)})"
     )
     reason += _diagnose(
         claimed,
@@ -239,7 +247,10 @@ def _diagnose(
     candidates += [(k, reversed_direction) for k in _KINDS if k != kind]
     for other_kind, other_direction in candidates:
         lhs, rhs = (a, b) if other_direction == "a_minus_b" else (b, a)
-        alt = _delta(other_kind, lhs, rhs)
+        try:
+            alt = _delta(other_kind, lhs, rhs)
+        except (OverflowError, ValueError):
+            continue
         if alt is None or not values_close(
             claimed, alt, tolerance=tolerance, rel_tolerance=rel_tolerance
         ):
@@ -248,10 +259,10 @@ def _diagnose(
             return f"; claim matches {other_direction}; declared {direction}"
         if other_direction == direction:
             return (
-                f"; claim {claimed:g} equals the {other_kind} delta; field declared kind={kind!r}"
+                f"; claim {claimed!r} equals the {other_kind} delta; field declared kind={kind!r}"
             )
         return (
-            f"; claim {claimed:g} equals the {other_kind} delta {other_direction}; "
+            f"; claim {claimed!r} equals the {other_kind} delta {other_direction}; "
             f"field declared kind={kind!r}, {direction}"
         )
     return ""

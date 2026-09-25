@@ -158,6 +158,23 @@ stdlib behaviour.
 Row keys keep their own type. An `int` id recorded by `record_table` stays an `int` all the way
 through `to_ranking`, so a model answering `101` is compared against `101` and never `"101"`.
 
+Boundary checks receive a read-only registry containing only `facts=`. List every fact a check
+uses, including facts read by a custom callable; an omitted list permits no facts. Checks called
+directly with a registry can use all its facts. This limits ordinary API access, not arbitrary
+Python code that already holds the original registry.
+
+Registration and public reads make deep copies of values and provenance arguments. Mutating a
+tool response or a prompt builder's copy therefore cannot rewrite recorded evidence. Values must
+support `copy.deepcopy`; custom Python objects remain responsible for honest copy and equality
+implementations. `submit()` validates the supplied output at that moment and returns the same
+object. If the caller changes it later, the changed output needs another check.
+
+Integer values retain their precision, and boolean or floating-point IDs cannot impersonate an
+integer key. Aggregates and comparisons use exact intermediate arithmetic, then round fractional
+results once to a float. A fractional result that underflows or loses precision at large magnitudes
+raises `ValueError`. This can change the last bit compared with separately rounded operations;
+use an explicit tolerance for rounded output. Tolerances must be finite and non-negative.
+
 ## Adapters
 
 | Symbol | Purpose |
@@ -168,8 +185,12 @@ through `to_ranking`, so a model answering `101` is compared against `101` and n
 | `adapters.mcp.record_result(registry, name, result, tool=, args=)` | Register an MCP result as a fact with the call as provenance. |
 | `adapters.mcp.call_and_record(session, registry, fact=, tool=, arguments=)` | Await an MCP tool call and record what came back. |
 
-Verified against langgraph 1.2.11 and mcp 2.1.1 on 2026-08-27, including a compiled `StateGraph`
-taking the reask edge on a wrong argmax.
+Verified against langgraph 1.2.12 and mcp 2.2.0 on 2026-09-26. CI's adapter job runs real
+`CallToolResult` objects and compiled synchronous and asynchronous `StateGraph` nodes, including
+the reask edge on a wrong argmax. `guarded_node` supports async functions and async callable
+objects; the `on_violation` handler remains synchronous. MCP results may be SDK objects or decoded
+mappings, and non-finite JSON numbers are rejected. Tool-call provenance captures arguments before
+execution, including positional arguments and defaults for `FactRegistry.tool`.
 
 ## Claim extraction: structured-output-first
 

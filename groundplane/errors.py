@@ -14,7 +14,7 @@ __all__ = ["ClaimsUnsupported", "FactBoundaryError", "UnregisteredFact", "Unsupp
 def _json_safe(value: object) -> Any:
     """Return ``value`` if ``json.dumps`` accepts it, else its ``repr``."""
     try:
-        json.dumps(value)
+        json.dumps(value, allow_nan=False)
     except (TypeError, ValueError):
         return repr(value)
     return value
