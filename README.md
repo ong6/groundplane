@@ -1,4 +1,4 @@
-# groundplane
+# Groundplane — Agent Fact Checks
 
 [![CI](https://github.com/ong6/groundplane/actions/workflows/ci.yml/badge.svg)](https://github.com/ong6/groundplane/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/groundplane)](https://pypi.org/project/groundplane/)
