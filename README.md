@@ -11,9 +11,9 @@ come from code. When the model crosses it, the build fails loudly.
 **Status: v0, in development.** API unstable. Not yet on PyPI.
 
 Groundplane is the runtime end of a small open-source agent-tooling chain.
-[Skillpack](https://github.com/ong6/skillpack) holds the instructions an agent loads, and
-[Skillsmith](https://github.com/ong6/skillsmith) makes a new instruction and checks whether it earns
-its place. Groundplane checks declared facts when that agent runs. The case study and animated
+[Skills](https://github.com/ong6/skills) holds the instructions an agent loads, and its
+[skillsmith](https://github.com/ong6/skills/tree/main/skills/skillsmith) skill makes a new instruction
+and checks whether it earns its place. Groundplane checks declared facts when that agent runs. The case study and animated
 boundary are at [junxiong.dev/groundplane](https://junxiong.dev/groundplane).
 
 ## The problem in 60 seconds
@@ -278,12 +278,5 @@ MIT © 2026 Ong Jun Xiong
 
 ## More from ong6
 
-Forges make things, packs bundle them.
-
-- [jobforge](https://github.com/ong6/jobforge) — grades the interview plan you say out loud, not the code you submit
-- [skillsmith](https://github.com/ong6/skillsmith) — makes an agent skill from your repo, then proves it beats no skill
-- [deckforge](https://github.com/ong6/deckforge) — agent-first presentation studio with a measured preflight
-- [proofpack](https://github.com/ong6/proofpack) — pilot evidence, review proposals and customer-safe handovers
-- [fieldpack](https://github.com/ong6/fieldpack) — deckforge and proofpack as one local-first suite
-- [skillpack](https://github.com/ong6/skillpack) — the Claude Code and Codex skills used across all of these
+- [skills](https://github.com/ong6/skills) — the public Claude Code and Codex skills, including skillsmith, interview-prep and the field-engineering deck and pilot-evidence skills
 - [uipack](https://github.com/ong6/uipack) — React and SVG figure components behind the diagrams on junxiong.dev
