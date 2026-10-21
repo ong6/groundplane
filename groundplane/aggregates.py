@@ -24,6 +24,7 @@ from ._internal import (
     require_field,
     require_number,
     values_close,
+    values_equal,
 )
 from .boundary import NamedCheck
 from .errors import UnsupportedClaim
@@ -60,7 +61,10 @@ def _select(
     for key in where:
         if key not in columns:
             raise KeyError(f"where column {key!r} not in table; columns: {list(columns)}")
-    return tuple(row for row in rows if all(k in row and row[k] == v for k, v in where.items()))
+    # values_equal, not ==: a filter on flag=True must not pick up rows holding 1.
+    return tuple(
+        row for row in rows if all(k in row and values_equal(row[k], v) for k, v in where.items())
+    )
 
 
 def check_aggregate_reconciles(

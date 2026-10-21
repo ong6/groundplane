@@ -16,7 +16,6 @@ from .errors import UnsupportedClaim
 from .registry import FactRegistry, OnMissing, Ranking, Table, require_number, same_key
 
 __all__ = [
-    "TOLERANCE_NOTE",
     "is_number",
     "require_field",
     "require_number",
@@ -24,15 +23,7 @@ __all__ = [
     "values_close",
 ]
 
-TOLERANCE_NOTE = """\
-``tolerance`` is an absolute tolerance and ``rel_tolerance`` a relative one, using
-the :func:`math.isclose` rule without converting integers to floats.
-
-**Footgun, and deliberate:** ``rel_tolerance=None`` (the default) means ``rel_tol=0.0``,
-*not* :func:`math.isclose`'s usual ``1e-9``. A checker whose job is to catch a wrong
-number must default to exact comparison; silently forgiving the last nine digits is a
-policy, and a policy belongs in the caller's hands. Pass ``rel_tolerance=1e-9``
-explicitly to get the stdlib behaviour."""
+_MISSING = object()
 
 
 def resolve_ranking(
@@ -124,7 +115,9 @@ def values_close(
 ) -> bool:
     """Numeric comparison with the library's tolerance policy.
 
-    See :data:`TOLERANCE_NOTE` for why ``rel_tolerance=None`` means exact, not ``1e-9``.
+    ``rel_tolerance=None`` means exact (``rel_tol=0.0``), not :func:`math.isclose`'s
+    ``1e-9``: a checker built to catch a wrong number must not forgive nine digits
+    unless the caller asks it to.
 
     NaN never matches, on either side: :func:`math.isclose` is false for it and this
     function does not special-case it. That is deliberate. A recorded fact containing
@@ -158,10 +151,18 @@ def values_equal(claimed: Any, recorded: Any) -> bool:
     if is_number(claimed) and is_number(recorded):
         return values_close(claimed, recorded)
     if isinstance(claimed, Mapping) and isinstance(recorded, Mapping):
-        return len(claimed) == len(recorded) and all(
-            any(same_key(key, other) and values_equal(value, recorded[other]) for other in recorded)
-            for key, value in claimed.items()
-        )
+        if len(claimed) != len(recorded):
+            return False
+        # Hash lookup finds the one recorded key that == the claimed key; same_key
+        # then refuses it if only Python's 1 == True == 1.0 alias made them equal.
+        stored = {key: key for key in recorded}
+        for key, value in claimed.items():
+            other = stored.get(key, _MISSING)
+            if other is _MISSING or not same_key(key, other):
+                return False
+            if not values_equal(value, recorded[other]):
+                return False
+        return True
     if isinstance(claimed, (list, tuple)) and isinstance(recorded, (list, tuple)):
         return (
             type(claimed) is type(recorded)
@@ -169,9 +170,10 @@ def values_equal(claimed: Any, recorded: Any) -> bool:
             and all(values_equal(a, b) for a, b in zip(claimed, recorded, strict=True))
         )
     if isinstance(claimed, (set, frozenset)) and isinstance(recorded, (set, frozenset)):
-        return len(claimed) == len(recorded) and all(
-            any(same_key(value, other) for other in recorded) for value in claimed
-        )
+        if len(claimed) != len(recorded):
+            return False
+        members = {value: value for value in recorded}
+        return all(same_key(value, members.get(value, _MISSING)) for value in claimed)
     return bool(claimed == recorded)
 
 

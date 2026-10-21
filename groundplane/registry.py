@@ -13,6 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import wraps
 from inspect import iscoroutinefunction, signature
+from itertools import pairwise
 from typing import Any, Literal
 
 from .errors import FactBoundaryError, UnregisteredFact
@@ -81,6 +82,67 @@ def _join(parts: Iterable[str]) -> str:
     return f"{', '.join(items[:-1])} or {items[-1]}"
 
 
+def _in_fact(fact: str | None) -> str:
+    return f" in fact {fact!r}" if fact is not None else ""
+
+
+def _check_scores(pairs: Sequence[tuple[Any, Any]], *, key: str, fact: str | None = None) -> None:
+    """Each entity scored once, every score a finite number.
+
+    A repeated name would make ``rank_of`` and ``score_of`` answer for whichever
+    copy sorted first, and NaN sorts arbitrarily and ties with nothing.
+    """
+    seen: set[Any] = set()
+    duplicates: list[Any] = []
+    for entity, score in pairs:
+        if entity in seen and entity not in duplicates:
+            duplicates.append(entity)
+        seen.add(entity)
+        require_number(score, column=key, key=entity, fact=fact)
+    if duplicates:
+        raise ValueError(
+            f"names {duplicates!r} appear more than once{_in_fact(fact)}; "
+            "a ranking scores each entity once"
+        )
+
+
+def _check_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    key: str,
+    columns: Sequence[str],
+    fact: str | None = None,
+) -> None:
+    """``key`` is a column, and every row carries a distinct value for it."""
+    if not rows:
+        raise ValueError(f"cannot record an empty table{_in_fact(fact)}")
+    if key not in columns:
+        raise ValueError(f"key column {key!r} is not among the table columns {list(columns)}")
+    seen: set[Any] = set()
+    for i, row in enumerate(rows):
+        if key not in row:
+            raise ValueError(f"row {i}{_in_fact(fact)} has no key column {key!r}")
+        if row[key] in seen:
+            raise ValueError(
+                f"key {row[key]!r} appears more than once{_in_fact(fact)}; "
+                f"{key!r} does not identify a row"
+            )
+        seen.add(row[key])
+
+
+def _check_members(members: Iterable[Any], *, fact: str | None = None) -> None:
+    """A domain is a non-empty set of strings."""
+    collected = tuple(members)
+    if not collected:
+        raise ValueError(f"cannot record an empty domain{_in_fact(fact)}")
+    for member in collected:
+        if not isinstance(member, str):
+            raise TypeError(
+                f"domain{_in_fact(fact)} member {member!r} is a {type(member).__name__}, "
+                "not a name; a domain holds strings"
+            )
+
+
 @dataclass(frozen=True)
 class Provenance:
     """Where a fact came from."""
@@ -110,6 +172,22 @@ class Ranking:
     key: str
     items: tuple[tuple[Any, float], ...]
     higher_is_better: bool = True
+
+    def __post_init__(self) -> None:
+        # A hand-built Ranking recorded through record() must not be able to name a
+        # winner the scores contradict: the invariants record_ranking establishes
+        # hold for every Ranking, however it was made.
+        if not self.items:
+            raise ValueError(f"a Ranking on {self.key!r} is empty; there is nothing to rank")
+        _check_scores(self.items, key=self.key)
+        scores = (score for _, score in self.items)
+        for left, right in pairwise(scores):
+            if (left < right) if self.higher_is_better else (left > right):
+                first = "highest" if self.higher_is_better else "lowest"
+                raise ValueError(
+                    f"Ranking on {self.key!r} is not ordered {first} first ({left!r} before "
+                    f"{right!r}); build it with record_ranking() so the order is computed in code"
+                )
 
     @property
     def winner(self) -> Any:
@@ -177,6 +255,10 @@ class Table:
     rows: tuple[Mapping[str, Any], ...]
     columns: tuple[str, ...]
     exhaustive: bool = True
+
+    def __post_init__(self) -> None:
+        # A duplicated key would let row() answer for whichever copy came first.
+        _check_rows(self.rows, key=self.key, columns=self.columns)
 
     @property
     def keys(self) -> tuple[Any, ...]:
@@ -256,6 +338,9 @@ class Domain:
 
     members: frozenset[str]
     label: str = "entity"
+
+    def __post_init__(self) -> None:
+        _check_members(self.members)
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -358,19 +443,7 @@ class FactRegistry:
         pairs = list(scores.items()) if isinstance(scores, Mapping) else list(scores)
         if not pairs:
             raise ValueError(f"cannot rank an empty score set for fact {name!r}")
-
-        seen: set[Any] = set()
-        duplicates: list[Any] = []
-        for entity, score in pairs:
-            if entity in seen and entity not in duplicates:
-                duplicates.append(entity)
-            seen.add(entity)
-            require_number(score, column=key, key=entity, fact=name)
-        if duplicates:
-            raise ValueError(
-                f"names {duplicates!r} appear more than once in fact {name!r}; "
-                "a ranking scores each entity once"
-            )
+        _check_scores(pairs, key=key, fact=name)
 
         ordered = tuple(sorted(pairs, key=lambda kv: kv[1], reverse=higher_is_better))
         ranking = Ranking(key=key, items=ordered, higher_is_better=higher_is_better)
@@ -397,26 +470,13 @@ class FactRegistry:
         materialised = tuple(dict(row) for row in rows)
         if not materialised:
             raise ValueError(f"cannot record an empty table for fact {name!r}")
-
         seen_columns: list[str] = []
         for row in materialised:
             for column in row:
                 if column not in seen_columns:
                     seen_columns.append(column)
         resolved = tuple(columns) if columns is not None else tuple(seen_columns)
-        if key not in resolved:
-            raise ValueError(f"key column {key!r} is not among the table columns {list(resolved)}")
-
-        seen_keys: set[Any] = set()
-        for i, row in enumerate(materialised):
-            if key not in row:
-                raise ValueError(f"row {i} of fact {name!r} has no key column {key!r}")
-            if row[key] in seen_keys:
-                raise ValueError(
-                    f"key {row[key]!r} appears more than once in fact {name!r}; "
-                    f"{key!r} does not identify a row"
-                )
-            seen_keys.add(row[key])
+        _check_rows(materialised, key=key, columns=resolved, fact=name)
 
         table = Table(key=key, rows=materialised, columns=resolved, exhaustive=exhaustive)
         return self.record(name, table, tool=tool, args=args)
@@ -432,14 +492,7 @@ class FactRegistry:
     ) -> Fact:
         """Register a closed set of names as a :class:`Domain` fact."""
         collected = tuple(members)
-        if not collected:
-            raise ValueError(f"cannot record an empty domain for fact {name!r}")
-        for member in collected:
-            if not isinstance(member, str):
-                raise TypeError(
-                    f"domain {name!r} member {member!r} is a {type(member).__name__}, "
-                    "not a name; a domain holds strings"
-                )
+        _check_members(collected, fact=name)
         domain = Domain(members=frozenset(collected), label=label)
         return self.record(name, domain, tool=tool, args=args)
 

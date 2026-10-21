@@ -139,6 +139,11 @@ class Boundary:
                 "boundary output must be a mapping of declared fields; "
                 "free prose is out of scope for v0 (see README, claim extraction)"
             )
+        if not self.checks:
+            raise FactBoundaryError(
+                "boundary has no checks, so submitting output would pass it unverified; "
+                "attach checks=[...], or use require_output=False and do not submit"
+            )
         self.output = output
         self._submitted = True
 

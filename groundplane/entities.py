@@ -21,7 +21,7 @@ from typing import Any
 from ._internal import require_field
 from .boundary import NamedCheck
 from .errors import UnsupportedClaim
-from .registry import Domain, FactRegistry, Ranking, Table
+from .registry import Domain, FactRegistry, Ranking, Table, same_key
 
 __all__ = ["entities_recorded", "check_entities_recorded"]
 
@@ -136,7 +136,7 @@ def _check_name(
                 ),
             )
             return
-        if any(type(member) is type(claimed) and member == claimed for member in members):
+        if any(same_key(member, claimed) for member in members):
             return
         _reject(
             field,

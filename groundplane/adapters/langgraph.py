@@ -125,9 +125,12 @@ def record_state(
     """Register values a previous node already put in the state as facts.
 
     ``keys`` maps state key to fact name. Use it when the tool call happened in a
-    node you do not own — the values are ground truth either way, and provenance
-    records which node produced them. Facts are write-once, so calling this twice
-    for the same fact raises rather than quietly re-recording a stale value.
+    node you do not own, and ``tool`` should name that node. The adapter cannot
+    tell who wrote a state key: a value is only ground truth if a tool node wrote
+    it, so never adopt a key the model node can also write, or the model's own
+    claim becomes the fact it is checked against. Facts are write-once, so calling
+    this twice for the same fact raises rather than quietly re-recording a stale
+    value.
     """
     for state_key, fact in keys.items():
         if state_key not in state:

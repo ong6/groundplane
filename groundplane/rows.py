@@ -16,7 +16,7 @@ from typing import Any
 from ._internal import is_number, require_field, require_number, values_close, values_equal
 from .boundary import NamedCheck
 from .errors import UnsupportedClaim
-from .registry import FactRegistry, Table
+from .registry import FactRegistry, Table, same_key
 
 __all__ = ["row_integrity", "check_row_integrity"]
 
@@ -35,15 +35,24 @@ def _values_match(
     return values_equal(claimed, recorded)
 
 
-def _other_row_with(table: Table, column: str, value: Any, *, exclude: Any) -> Any | None:
-    """The key of another row carrying ``value`` in ``column``, if one exists."""
+def _other_row_with(
+    table: Table,
+    column: str,
+    value: Any,
+    *,
+    exclude: Any,
+    tolerance: float,
+    rel_tolerance: float | None,
+) -> Any | None:
+    """The key of another row whose ``column`` matches ``value``, if one exists.
+
+    Matching uses the same rule as the check itself, so the diagnosis never blames
+    a row the check would not have accepted the value from.
+    """
     for row in table.rows:
-        if row[table.key] == exclude or column not in row:
+        if same_key(row[table.key], exclude) or column not in row:
             continue
-        recorded = row[column]
-        if is_number(value) != is_number(recorded):
-            continue
-        if recorded == value:
+        if _values_match(value, row[column], tolerance=tolerance, rel_tolerance=rel_tolerance):
             return row[table.key]
     return None
 
@@ -108,7 +117,14 @@ def check_row_integrity(
             require_number(recorded, column=column, key=claimed_key, fact=fact)
         if _values_match(claimed, recorded, tolerance=tolerance, rel_tolerance=rel_tolerance):
             continue
-        source = _other_row_with(table, column, claimed, exclude=claimed_key)
+        source = _other_row_with(
+            table,
+            column,
+            claimed,
+            exclude=claimed_key,
+            tolerance=tolerance,
+            rel_tolerance=rel_tolerance,
+        )
         detail = (
             f"; {claimed!r} belongs to row {source!r}"
             if source is not None
