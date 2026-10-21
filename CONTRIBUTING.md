@@ -13,7 +13,7 @@ All four must pass; CI runs the same commands.
 
 ```bash
 ruff check .
-ruff format --check groundplane tests examples
+ruff format --check .
 mypy
 pytest -q
 ```

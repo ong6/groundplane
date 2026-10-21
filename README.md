@@ -1,7 +1,6 @@
 # Groundplane — Agent Fact Checks
 
 [![CI](https://github.com/ong6/groundplane/actions/workflows/ci.yml/badge.svg)](https://github.com/ong6/groundplane/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/groundplane)](https://pypi.org/project/groundplane/)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://github.com/ong6/groundplane/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/ong6/groundplane/blob/main/LICENSE)
 
@@ -114,11 +113,13 @@ propagates from `report()`. That is a developer mistake, not a model mistake.
 
 ## Install
 
+Not on PyPI yet; `pip install groundplane` will fail until the first release. Install from GitHub:
+
 ```bash
-pip install groundplane
+pip install "groundplane @ git+https://github.com/ong6/groundplane"
 ```
 
-First PyPI release is pending; until then, `pip install -e ".[dev]"` from a checkout.
+or, to work on it, `pip install -e ".[dev]"` from a checkout.
 
 Requires Python >= 3.10. The core has no runtime dependencies. `groundplane[langgraph]` and
 `groundplane[mcp]` pull in those frameworks. The adapters import neither, so they read and test
@@ -158,6 +159,14 @@ stdlib behaviour.
 Row keys keep their own type. An `int` id recorded by `record_table` stays an `int` all the way
 through `to_ranking`, so a model answering `101` is compared against `101` and never `"101"`.
 
+A boundary must have at least one check. Submitting to one with `checks=()` raises
+`FactBoundaryError` rather than returning the output as if it had been verified.
+
+`Ranking`, `Table` and `Domain` enforce their invariants however they are built. A hand-built
+`Ranking` passed to `record()` must be ordered best-first, with finite scores and unique names; a
+`Table` needs a unique key on every row; a `Domain` holds strings. Prefer the `record_*` methods,
+which compute the ordering in code and name the fact in their errors.
+
 Boundary checks receive a read-only registry containing only `facts=`. List every fact a check
 uses, including facts read by a custom callable; an omitted list permits no facts. Checks called
 directly with a registry can use all its facts. This limits ordinary API access, not arbitrary
@@ -180,7 +189,7 @@ use an explicit tolerance for rounded output. Tolerances must be finite and non-
 | Symbol | Purpose |
 |---|---|
 | `adapters.langgraph.guarded_node(fn, registry=, facts=, checks=, output_key=, on_violation=)` | Wrap a LangGraph node so its state update crosses a boundary. Without `on_violation` an unsupported claim fails the run; with it, the claim becomes a state update the graph can route to a reask node. A misconfigured check still propagates — a developer bug is not something to reask the model about. |
-| `adapters.langgraph.record_state(registry, state, keys=, tool=)` | Adopt values an upstream node already put in the state as facts. |
+| `adapters.langgraph.record_state(registry, state, keys=, tool=)` | Adopt values an upstream node already put in the state as facts. Only as trustworthy as the node that wrote them: never adopt a key the model node can write. |
 | `adapters.mcp.payload_of(result)` | The value an MCP tool result carries. Structured content wins over the text blocks, which are a rendering of it. An `isError` result raises rather than becoming a fact. |
 | `adapters.mcp.record_result(registry, name, result, tool=, args=)` | Register an MCP result as a fact with the call as provenance. |
 | `adapters.mcp.call_and_record(session, registry, fact=, tool=, arguments=)` | Await an MCP tool call and record what came back. |
@@ -269,7 +278,7 @@ misleadingly around it, that passes. The checker reads fields, not prose. I kept
 narrow because every system I looked at that tried to verify open prose ended up delegating the
 verdict to embeddings or a judge model, which brings back the probabilistic verdict this exists to
 remove. The six check families all validate *relations between recorded values*: argmax, ordering,
-reconciliation, membership, row integrity. That is the ground a per-field validator cannot see and a
+reconciliation, membership, row integrity and recomputed deltas. That is the ground a per-field validator cannot see and a
 similarity score cannot express.
 
 ## License

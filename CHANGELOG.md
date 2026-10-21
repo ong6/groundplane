@@ -6,6 +6,41 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed (breaking)
+- `Ranking`, `Table` and `Domain` validate their invariants on construction, not only in the
+  `record_*` methods. A hand-built `Ranking` passed to `record()` that is not ordered best-first
+  (or is empty, repeats a name, or holds a non-finite or non-numeric score), a `Table` whose key
+  is missing or repeated, and a `Domain` that is empty or holds non-strings now raise. Previously
+  an out-of-order `Ranking` let `superlative` accept the runner-up as the winner.
+- `Boundary.submit()` and `Boundary.report()` raise `FactBoundaryError` when the boundary has no
+  checks. Previously any output passed and was returned as if verified.
+- `aggregate_reconciles(where=...)` matches filter values with the library's equality rule, so
+  `where={"flag": True}` no longer selects rows holding `1` (numbers still match across `int` and
+  `float`).
+
+### Fixed
+- `entities_recorded` no longer accepts a composite name such as `(True, "x")` for the recorded
+  `(1, "x")`.
+- `row_integrity`'s "belongs to row" diagnosis uses the check's own matching rule and tolerance, so
+  it no longer blames a row holding `[1]` for a claimed `[True]`.
+- `field_matches_fact` compares mappings and sets in linear time; a 20,000-key fact took tens of
+  seconds before.
+- The sdist no longer ships the local `.hypothesis/` cache.
+- README: install instructions no longer lead with `pip install groundplane`, which fails until the
+  first PyPI release; the PyPI badge is gone; `record_state` documents that adopted state is only
+  as trustworthy as the node that wrote it.
+
+### Removed
+- The unused internal `TOLERANCE_NOTE` constant.
+
+### Hardening since 0.1.0 (2026-09-26, previously unlisted)
+- Boundary checks see a read-only registry restricted to `facts=`; registration and reads deep-copy
+  values and provenance arguments.
+- Exact intermediate arithmetic for aggregates and comparisons; integers keep full precision;
+  tolerances must be finite and non-negative.
+- `FactRegistry.tool` captures positional arguments and defaults before the call and supports async
+  callables; `guarded_node` supports async nodes; MCP text payloads reject non-finite numbers.
+
 ## [0.1.0] - 2026-09-02
 
 ### Added
